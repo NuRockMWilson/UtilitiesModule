@@ -1,18 +1,18 @@
-import { redirect, notFound } from "next/navigation";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/layout/TopBar";
-import { formatDollars, formatNumber, formatPercent } from "@/lib/format";
+import { formatDollars } from "@/lib/format";
+import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
 
 /**
- * Water usage detail page. Shows every historical and current water reading
- * for a property in reverse chronological order, matching the legacy
+ * Water detail page. Shows every water/sewer/irrigation/stormwater account
+ * at this property in a per-account × per-month grid matching the legacy
  * "<Property>_Water_usage_break_down.xlsx" layout:
  *
- *   Service period | Days | Usage | Daily usage | Δ vs prior | Occupancy | Amount
+ *   Account # | Description | Jan | Feb | ... | Dec | YTD
  *
- * Historical readings seeded from 0005_historical_data.sql show up here;
- * new water bills append as they're processed through the extraction pipeline.
+ * Water is GL 5120, Irrigation 5122, Sewer 5125.
  */
 export default async function WaterDetailPage({
   params,
@@ -28,351 +28,211 @@ export default async function WaterDetailPage({
     .select("id, code, name, full_code")
     .eq("code", params.propertyCode)
     .single();
-
   if (!property) notFound();
 
   const year = searchParams.year ? parseInt(searchParams.year, 10) : new Date().getFullYear();
-  const yearStart = `${year}-01-01`;
-  const yearEnd   = `${year}-12-31`;
 
-  // All water readings for this property, newest first, through the
-  // utility_accounts → property_id relationship. Covers both historical
-  // (HIST-<code>) synthetic accounts and real vendor accounts created from
-  // processed bills.
-  const { data: rows } = await supabase
-    .from("usage_readings")
+  // Every utility account at this property whose GL is water/sewer/irrigation/stormwater
+  const { data: acctRaw } = await supabase
+    .from("utility_accounts")
     .select(`
-      id, reading_type, service_start, service_end, days,
-      usage_amount, usage_unit, occupancy_pct,
-      utility_accounts!inner ( property_id ),
-      invoices ( id, invoice_number, total_amount_due, invoice_date, status )
+      id, account_number, description, meter_id, esi_id, meter_category,
+      gl_accounts!inner ( code, description ),
+      vendors ( name )
     `)
-    .eq("utility_accounts.property_id", property.id)
-    .eq("reading_type", "water")
-    .order("service_end", { ascending: false, nullsFirst: false })
-    .limit(500);
+    .eq("property_id", property.id)
+    .eq("active", true)
+    .in("gl_accounts.code", ["5120", "5122", "5125"]);
 
-  const allReadings = (rows ?? []).map((r: any) => ({
-    id:            r.id,
-    service_start: r.service_start as string | null,
-    service_end:   r.service_end   as string | null,
-    days:          r.days          as number | null,
-    usage:         r.usage_amount ? Number(r.usage_amount) : null,
-    unit:          r.usage_unit ?? "gallons",
-    occupancy:     r.occupancy_pct ? Number(r.occupancy_pct) : null,
-    invoice_id:    r.invoices?.id ?? null,
-    invoice_num:   r.invoices?.invoice_number ?? null,
-    amount:        r.invoices?.total_amount_due ? Number(r.invoices.total_amount_due) : null,
-    status:        r.invoices?.status ?? null,
+  const accounts: AccountRow[] = (acctRaw ?? []).map((a: any) => ({
+    id:             a.id,
+    account_number: a.account_number,
+    description:    a.description ?? a.gl_accounts?.description ?? null,
+    meter_id:       a.meter_id,
+    esi_id:         a.esi_id,
+    category:       a.gl_accounts?.code === "5125"
+      ? "Sewer"
+      : a.gl_accounts?.code === "5122"
+        ? "Irrigation"
+        : "Water",
+    vendor_name:    a.vendors?.name ?? null,
   }));
 
-  // Line-item breakdown for water invoices at this property. Joined by
-  // invoice_id so we can surface "Jan: Water $6,508 + Sewer $6,780 + ..."
-  // on the same page as the reading-level history.
-  const invoiceIds = allReadings
-    .map(r => r.invoice_id)
-    .filter((id): id is string => !!id);
-
-  const { data: lineItemRows } = invoiceIds.length
+  // Every invoice for those accounts in any year (we filter client-side for the year picker)
+  const accountIds = accounts.map(a => a.id);
+  const { data: invRaw } = accountIds.length
     ? await supabase
-        .from("invoice_line_items")
-        .select("invoice_id, description, category, amount, is_consumption_based, gl_coding")
-        .in("invoice_id", invoiceIds)
+        .from("invoices")
+        .select("id, invoice_number, utility_account_id, invoice_date, total_amount_due")
+        .in("utility_account_id", accountIds)
     : { data: [] };
 
-  // Group line items by invoice_id for easy rendering
-  const lineItemsByInvoice = new Map<string, Array<{
-    description: string;
-    category:    string;
-    amount:      number;
-    is_consumption_based: boolean;
-    gl_coding:   string | null;
-  }>>();
-  for (const li of (lineItemRows ?? []) as any[]) {
-    const list = lineItemsByInvoice.get(li.invoice_id) ?? [];
-    list.push({
-      description:          String(li.description),
-      category:             String(li.category ?? "other"),
-      amount:               Number(li.amount),
-      is_consumption_based: Boolean(li.is_consumption_based),
-      gl_coding:            li.gl_coding ?? null,
-    });
-    lineItemsByInvoice.set(li.invoice_id, list);
-  }
+  const invoices = (invRaw ?? []).map((i: any) => ({
+    id:             i.id as string,
+    invoice_number: i.invoice_number as string | null,
+    account_id:     i.utility_account_id as string,
+    date:           i.invoice_date as string | null,
+    amount:         Number(i.total_amount_due ?? 0),
+  }));
 
-  // Filter to year, but also surface a 12-month-prior cohort for delta calcs
-  const currentYear = allReadings.filter(r =>
-    r.service_end && r.service_end.startsWith(String(year)));
-  const allSorted = [...allReadings].sort((a, b) =>
-    (a.service_end ?? "").localeCompare(b.service_end ?? ""));
-
-  // Compute Δ vs prior reading (chronological) for each row
-  const deltas = new Map<string, number | null>();
-  for (let i = 0; i < allSorted.length; i++) {
-    const cur = allSorted[i];
-    const prev = allSorted[i - 1];
-    if (cur && prev && cur.usage && prev.usage && prev.usage > 0) {
-      const daily_cur  = cur.days  ? cur.usage  / cur.days  : cur.usage;
-      const daily_prev = prev.days ? prev.usage / prev.days : prev.usage;
-      deltas.set(cur.id, (daily_cur - daily_prev) / daily_prev);
-    } else {
-      deltas.set(cur.id, null);
-    }
-  }
-
-  // Year-based stats for the top bar
-  const totalUsage   = currentYear.reduce((s, r) => s + (r.usage ?? 0), 0);
-  const totalAmount  = currentYear.reduce((s, r) => s + (r.amount ?? 0), 0);
-  const totalDays    = currentYear.reduce((s, r) => s + (r.days ?? 0), 0);
-  const avgDaily     = totalDays > 0 ? totalUsage / totalDays : 0;
-  const avgOcc       = currentYear.length
-    ? currentYear.reduce((s, r) => s + (r.occupancy ?? 0), 0) / currentYear.length
-    : 0;
-  const unit         = currentYear[0]?.unit ?? allReadings[0]?.unit ?? "gallons";
-
-  // Available years for the year picker
-  const years = Array.from(new Set(allReadings
-    .map(r => r.service_end ? parseInt(r.service_end.substring(0, 4), 10) : null)
-    .filter((y): y is number => y !== null)
+  // Year picker options — every year that has invoice data
+  const years = Array.from(new Set(
+    invoices.map(i => i.date ? parseInt(i.date.substring(0, 4), 10) : null)
+           .filter((y): y is number => y !== null)
   )).sort((a, b) => b - a);
+  if (!years.includes(year)) years.unshift(year);
+
+  // Build accountId → { month → amount } for the selected year
+  const amountsByAccountMonth = new Map<string, Record<number, number>>();
+  const invoiceByAccountMonth = new Map<string, { id: string; number: string | null }>();
+  for (const inv of invoices) {
+    if (!inv.date) continue;
+    const y = parseInt(inv.date.substring(0, 4), 10);
+    if (y !== year) continue;
+    const m = parseInt(inv.date.substring(5, 7), 10);
+    const bucket = amountsByAccountMonth.get(inv.account_id) ?? {};
+    bucket[m] = (bucket[m] ?? 0) + inv.amount;
+    amountsByAccountMonth.set(inv.account_id, bucket);
+    invoiceByAccountMonth.set(`${inv.account_id}:${m}`, {
+      id:     inv.id,
+      number: inv.invoice_number,
+    });
+  }
+
+  // Split accounts by category for separate grids (mirrors legacy spreadsheet)
+  const waterAccts      = accounts.filter(a => a.category === "Water");
+  const irrigationAccts = accounts.filter(a => a.category === "Irrigation");
+  const sewerAccts      = accounts.filter(a => a.category === "Sewer");
+
+  // YTD totals for the KPI strip
+  const ytdForAccounts = (accts: AccountRow[]) =>
+    accts.reduce((sum, a) => {
+      const bucket = amountsByAccountMonth.get(a.id) ?? {};
+      return sum + Object.values(bucket).reduce((s, v) => s + v, 0);
+    }, 0);
+
+  const waterYtd      = ytdForAccounts(waterAccts);
+  const sewerYtd      = ytdForAccounts(sewerAccts);
+  const irrigationYtd = ytdForAccounts(irrigationAccts);
+  const totalYtd      = waterYtd + sewerYtd + irrigationYtd;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <TopBar
-        title={`${property.name} · Water usage`}
-        subtitle={`${property.full_code} · ${currentYear.length} readings in ${year} · ${allReadings.length} total on file`}
+        title={`${property.name} · Water detail`}
+        subtitle={`${property.full_code} · ${accounts.length} accounts · ${year} YTD ${formatDollars(totalYtd)}`}
       />
 
-      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
-            ← Summary
-          </Link>
-          <div className="flex items-center gap-1 ml-4">
-            <span className="text-xs text-nurock-slate mr-2">Year:</span>
-            {years.map(y => (
-              <Link
-                key={y}
-                href={`/tracker/${property.code}/water?year=${y}`}
-                className={
-                  "px-2 py-1 rounded text-xs " +
-                  (y === year
-                    ? "bg-nurock-navy text-white"
-                    : "text-nurock-navy hover:bg-nurock-flag-navy-bg")
-                }
-              >
-                {y}
-              </Link>
-            ))}
-          </div>
+      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center gap-2">
+        <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
+          ← Summary
+        </Link>
+        <div className="flex items-center gap-1 ml-4">
+          <span className="font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-nurock-slate mr-2">Year</span>
+          {years.map(y => (
+            <Link
+              key={y}
+              href={`/tracker/${property.code}/water?year=${y}`}
+              className={
+                "px-2 py-1 rounded-md text-[11px] font-medium transition-colors " +
+                (y === year ? "bg-nurock-navy text-white" : "text-nurock-slate hover:bg-nurock-flag-navy-bg hover:text-nurock-navy")
+              }
+            >
+              {y}
+            </Link>
+          ))}
         </div>
       </div>
 
       <div className="flex-1 overflow-auto bg-nurock-bg">
-        <div className="px-8 py-6">
-          {/* Year summary cards */}
-          <div className="grid grid-cols-4 gap-4 mb-6">
-            <StatCard label={`${year} total usage`}
-                      value={`${formatNumber(totalUsage)} ${unit}`} />
-            <StatCard label={`${year} avg daily`}
-                      value={`${formatNumber(avgDaily, 1)} ${unit}/day`} />
-            <StatCard label={`${year} avg occupancy`}
-                      value={avgOcc > 0 ? formatPercent(avgOcc) : "—"} />
-            <StatCard label={`${year} billed`}
-                      value={totalAmount > 0 ? formatDollars(totalAmount) : "—"} />
+        <div className="px-8 py-6 space-y-6 max-w-[1600px] mx-auto w-full">
+
+          {/* KPI strip */}
+          <div className="grid grid-cols-4 gap-3">
+            <div className="kpi-tile navy">
+              <div className="kpi-label">{year} Total</div>
+              <div className="kpi-value num">{formatDollars(totalYtd)}</div>
+            </div>
+            <div className="kpi-tile">
+              <div className="kpi-label">Water (5120)</div>
+              <div className="kpi-value num">{formatDollars(waterYtd)}</div>
+              <div className="kpi-sub">{waterAccts.length} {waterAccts.length === 1 ? "account" : "accounts"}</div>
+            </div>
+            <div className="kpi-tile">
+              <div className="kpi-label">Sewer (5125)</div>
+              <div className="kpi-value num">{formatDollars(sewerYtd)}</div>
+              <div className="kpi-sub">{sewerAccts.length} {sewerAccts.length === 1 ? "account" : "accounts"}</div>
+            </div>
+            <div className="kpi-tile">
+              <div className="kpi-label">Irrigation (5122)</div>
+              <div className="kpi-value num">{formatDollars(irrigationYtd)}</div>
+              <div className="kpi-sub">{irrigationAccts.length} {irrigationAccts.length === 1 ? "account" : "accounts"}</div>
+            </div>
           </div>
 
-          {currentYear.length === 0 && allReadings.length === 0 && (
-            <div className="card p-8 text-center">
-              <div className="text-nurock-navy font-medium mb-2">No water readings on file</div>
-              <div className="text-sm text-nurock-slate">
-                This property has no water usage history yet. Readings will appear here
-                as water bills flow through the extraction pipeline.
-              </div>
-            </div>
-          )}
-
-          {currentYear.length === 0 && allReadings.length > 0 && (
-            <div className="card p-6 text-center text-sm text-nurock-slate mb-4">
-              No readings in {year}. Historical data available —
-              pick a different year above, or view{" "}
-              <Link
-                href={`/tracker/${property.code}/water?year=${allReadings[0]?.service_end?.substring(0, 4) ?? year}`}
-                className="text-nurock-navy underline">
-                most recent readings
-              </Link>.
-            </div>
-          )}
-
-          {currentYear.length > 0 && (
-            <div className="card overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-[#FAFBFC] text-nurock-slate text-[10px] uppercase tracking-[0.08em] font-display font-semibold">
-                  <tr>
-                    <th className="cell-head">Service period</th>
-                    <th className="cell-head text-right">Days</th>
-                    <th className="cell-head text-right">Usage ({unit})</th>
-                    <th className="cell-head text-right">Daily usage</th>
-                    <th className="cell-head text-right">Δ vs prior</th>
-                    <th className="cell-head text-right">Occupancy</th>
-                    <th className="cell-head text-right">Amount</th>
-                    <th className="cell-head">Invoice</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-nurock-border">
-                  {currentYear.map(r => {
-                    const daily = r.days && r.usage ? r.usage / r.days : null;
-                    const delta = deltas.get(r.id);
-                    return (
-                      <tr key={r.id} className="hover:bg-nurock-bg">
-                        <td className="cell num">
-                          {r.service_start && r.service_end
-                            ? `${formatDate(r.service_start)} – ${formatDate(r.service_end)}`
-                            : r.service_end ?? "—"}
-                        </td>
-                        <td className="cell text-right num">{r.days ?? "—"}</td>
-                        <td className="cell text-right num">
-                          {r.usage !== null ? formatNumber(r.usage, 2) : "—"}
-                        </td>
-                        <td className="cell text-right num">
-                          {daily !== null ? formatNumber(daily, 2) : "—"}
-                        </td>
-                        <td className={
-                          "px-3 py-2 text-right tabular-nums " +
-                          (delta !== null && delta !== undefined
-                            ? (delta > 0.03  ? "text-flag-red font-medium"  :
-                               delta < -0.03 ? "text-flag-green"            : "text-nurock-slate")
-                            : "text-nurock-slate-light")
-                        }>
-                          {delta !== null && delta !== undefined
-                            ? formatPercent(delta, { sign: true })
-                            : "—"}
-                        </td>
-                        <td className="cell text-right num">
-                          {r.occupancy !== null ? formatPercent(r.occupancy) : "—"}
-                        </td>
-                        <td className="cell text-right num">
-                          {r.amount !== null ? formatDollars(r.amount) : "—"}
-                        </td>
-                        <td className="cell">
-                          {r.invoice_id ? (
-                            <Link
-                              href={`/invoices/${r.invoice_id}`}
-                              className="text-nurock-navy hover:underline font-mono"
-                            >
-                              {r.invoice_num}
-                            </Link>
-                          ) : <span className="text-nurock-slate-light">—</span>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot className="bg-nurock-flag-navy-bg font-medium">
-                  <tr>
-                    <td className="cell">{year} total</td>
-                    <td className="cell text-right num">{totalDays}</td>
-                    <td className="cell text-right num">{formatNumber(totalUsage)}</td>
-                    <td className="cell text-right num">{formatNumber(avgDaily, 2)}</td>
-                    <td></td>
-                    <td className="cell text-right num">
-                      {avgOcc > 0 ? formatPercent(avgOcc) : "—"}
-                    </td>
-                    <td className="cell text-right num">
-                      {totalAmount > 0 ? formatDollars(totalAmount) : "—"}
-                    </td>
-                    <td></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          )}
-
-          <p className="text-xs text-nurock-slate-light mt-4">
-            Variance threshold shown in red/green is the default 3% —
-            configurable per utility account under Admin → Utility Accounts.
-            Historical readings (before the app went live) are marked with
-            invoice numbers starting <span className="font-mono">HIST-W-</span>.
-          </p>
-
-          {/* Line-item breakdown per invoice (Priority 1 deliverable) */}
-          {currentYear.length > 0 && lineItemsByInvoice.size > 0 && (
-            <div className="mt-8">
-              <h2 className="font-display text-lg font-semibold text-nurock-black mb-1">
-                Line-item breakdown
+          {/* Per-account grid — one section per GL category */}
+          {waterAccts.length > 0 && (
+            <section>
+              <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-nurock-navy mb-3">
+                Water — GL 5120
               </h2>
-              <p className="text-xs text-nurock-slate-light mb-3">
-                Each bill split into its component charges — water, sewer,
-                irrigation, storm water, environmental protection fees, and
-                other line items. Consumption-driven lines (<span className="text-nurock-navy">●</span>) feed
-                per-category variance; flat fees (<span className="text-nurock-slate-light">○</span>) are excluded from variance.
-              </p>
-              <div className="card overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-[#FAFBFC] text-nurock-slate text-[10px] uppercase tracking-[0.08em] font-display font-semibold">
-                    <tr>
-                      <th className="cell-head">Service period</th>
-                      <th className="cell-head">Line item</th>
-                      <th className="cell-head">Category</th>
-                      <th className="cell-head">GL</th>
-                      <th className="cell-head text-right">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-nurock-border">
-                    {currentYear.flatMap(r => {
-                      const items = r.invoice_id ? lineItemsByInvoice.get(r.invoice_id) ?? [] : [];
-                      if (items.length === 0) return [];
-                      return items.map((li, idx) => (
-                        <tr key={`${r.id}-${idx}`} className="hover:bg-nurock-bg">
-                          <td className="cell num">
-                            {idx === 0 && r.service_start && r.service_end
-                              ? `${formatDate(r.service_start)} – ${formatDate(r.service_end)}`
-                              : ""}
-                          </td>
-                          <td className="cell">
-                            <span className={li.is_consumption_based ? "text-nurock-navy" : "text-nurock-slate-light"}>
-                              {li.is_consumption_based ? "● " : "○ "}
-                            </span>
-                            {li.description}
-                          </td>
-                          <td className="px-3 py-2 text-xs text-nurock-slate">
-                            {li.category.replace(/_/g, " ")}
-                          </td>
-                          <td className="px-3 py-2 text-xs font-mono text-nurock-slate">
-                            {li.gl_coding ?? "—"}
-                          </td>
-                          <td className="cell text-right num">
-                            {formatDollars(li.amount)}
-                          </td>
-                        </tr>
-                      ));
-                    })}
-                  </tbody>
-                </table>
+              <PerAccountMonthlyGrid
+                accounts={waterAccts}
+                amountsByAccountMonth={amountsByAccountMonth}
+                invoiceHrefByAccountMonth={invoiceByAccountMonth}
+                leftHeader="Account #"
+                middleHeader="Description"
+              />
+            </section>
+          )}
+
+          {sewerAccts.length > 0 && (
+            <section>
+              <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-nurock-navy mb-3">
+                Sewer — GL 5125
+              </h2>
+              <PerAccountMonthlyGrid
+                accounts={sewerAccts}
+                amountsByAccountMonth={amountsByAccountMonth}
+                invoiceHrefByAccountMonth={invoiceByAccountMonth}
+                leftHeader="Account #"
+                middleHeader="Description"
+              />
+            </section>
+          )}
+
+          {irrigationAccts.length > 0 && (
+            <section>
+              <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-nurock-navy mb-3">
+                Irrigation — GL 5122
+              </h2>
+              <PerAccountMonthlyGrid
+                accounts={irrigationAccts}
+                amountsByAccountMonth={amountsByAccountMonth}
+                invoiceHrefByAccountMonth={invoiceByAccountMonth}
+                leftHeader="Account #"
+                middleHeader="Description"
+              />
+            </section>
+          )}
+
+          {accounts.length === 0 && (
+            <div className="card p-8 text-center">
+              <div className="text-nurock-black font-medium mb-2">No water accounts on file</div>
+              <div className="text-[12.5px] text-nurock-slate-light">
+                Water accounts are created automatically from the historical import
+                or as bills flow through the extraction pipeline.
               </div>
-              <p className="text-xs text-nurock-slate-light mt-2">
-                Historical line items (marked with HIST- invoice numbers) come from the
-                per-property Water sheet. Line items sum should equal the month's total
-                within $0.02; mismatches are flagged on the invoice detail page.
-              </p>
             </div>
           )}
+
+          <p className="text-[11px] text-nurock-slate-light">
+            Each amount above is clickable when it links to an individual invoice.
+            Historical rollups from the legacy Water sheet have invoice numbers
+            starting with <span className="font-mono">HIST-W-</span>.
+          </p>
         </div>
       </div>
     </div>
   );
-}
-
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="kpi-tile navy">
-      <div className="kpi-label">{label}</div>
-      <div className="kpi-value num">{value}</div>
-    </div>
-  );
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${String(d.getUTCFullYear()).slice(-2)}`;
 }

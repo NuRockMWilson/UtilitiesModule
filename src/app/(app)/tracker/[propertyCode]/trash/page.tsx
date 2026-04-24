@@ -2,16 +2,19 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/layout/TopBar";
-import { formatDollars, formatNumber, formatPercent } from "@/lib/format";
+import { formatDollars, formatPercent } from "@/lib/format";
+import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
 
 /**
- * Trash / Garbage detail page. Monthly view of trash spend with pickup counts
- * and cost-per-pickup normalization.
+ * Trash / Garbage detail page. Per-account monthly grid for GL 5135.
  *
- * Why this view matters: raw monthly trash totals vary heavily with pickup
- * counts (tenant turnover spikes = more pickups = higher bill). The
- * operationally-relevant signal is "did cost per pickup change?" which this
- * page surfaces via the $/pickup column and period-over-period deltas.
+ * Properties like Onion Creek have multiple trash accounts (compactor,
+ * recycle cart, temporary open-top), so this view surfaces each account
+ * separately — matching the legacy "Garbage" sheet layout.
+ *
+ * Pickup counts and $/pickup appear in a secondary table below the grid for
+ * variance reference, since cost-per-pickup is often more informative than
+ * cost-per-month when pickup frequency changes.
  */
 export default async function TrashDetailPage({
   params,
@@ -27,233 +30,169 @@ export default async function TrashDetailPage({
     .select("id, code, name, full_code")
     .eq("code", params.propertyCode)
     .single();
-
   if (!property) notFound();
 
   const year = searchParams.year ? parseInt(searchParams.year, 10) : new Date().getFullYear();
 
-  // Pull every trash invoice (GL 5135) for this property, any year
-  const { data: rowsRaw } = await supabase
-    .from("invoices")
+  const { data: acctRaw } = await supabase
+    .from("utility_accounts")
     .select(`
-      id, invoice_number, invoice_date,
-      service_period_start, service_period_end, service_days,
-      total_amount_due, status, source_reference,
-      units_billed, units_billed_label,
-      vendors ( name ),
-      gl_accounts!inner ( code )
+      id, account_number, description,
+      gl_accounts!inner ( code ),
+      vendors ( name )
     `)
     .eq("property_id", property.id)
-    .eq("gl_accounts.code", "5135")
-    .order("invoice_date", { ascending: false });
+    .eq("active", true)
+    .eq("gl_accounts.code", "5135");
 
-  const all = (rowsRaw ?? []).map((r: any) => ({
-    id:             r.id,
-    invoice_number: r.invoice_number as string | null,
-    invoice_date:   r.invoice_date   as string | null,
-    service_start:  r.service_period_start as string | null,
-    service_end:    r.service_period_end   as string | null,
-    days:           r.service_days as number | null,
-    amount:         Number(r.total_amount_due ?? 0),
-    status:         r.status as string,
-    pickups:        r.units_billed ? Number(r.units_billed) : null,
-    vendor_name:    r.vendors?.name ?? null,
+  const accounts: AccountRow[] = (acctRaw ?? []).map((a: any) => ({
+    id:             a.id,
+    account_number: a.account_number,
+    description:    a.description,
+    vendor_name:    a.vendors?.name ?? null,
   }));
 
-  // Year picker uses every year present in the data
-  const years = Array.from(new Set(all.map(r =>
-    r.invoice_date ? parseInt(r.invoice_date.substring(0, 4), 10) : null
-  ).filter((y): y is number => y !== null))).sort((a, b) => b - a);
+  const accountIds = accounts.map(a => a.id);
+  const { data: invRaw } = accountIds.length
+    ? await supabase
+        .from("invoices")
+        .select("id, invoice_number, utility_account_id, invoice_date, total_amount_due, units_billed, units_billed_label")
+        .in("utility_account_id", accountIds)
+    : { data: [] };
 
-  const currentYear = all.filter(r => r.invoice_date?.startsWith(String(year)));
+  const invoices = (invRaw ?? []).map((i: any) => ({
+    id:             i.id as string,
+    invoice_number: i.invoice_number as string | null,
+    account_id:     i.utility_account_id as string,
+    date:           i.invoice_date as string | null,
+    amount:         Number(i.total_amount_due ?? 0),
+    pickups:        i.units_billed ? Number(i.units_billed) : null,
+    units_label:    i.units_billed_label as string | null,
+  }));
 
-  // Sort chronologically for the δ-vs-prior calculation
-  const chronological = [...currentYear].sort((a, b) =>
-    (a.invoice_date ?? "").localeCompare(b.invoice_date ?? "")
-  );
+  const years = Array.from(new Set(
+    invoices.map(i => i.date ? parseInt(i.date.substring(0, 4), 10) : null)
+           .filter((y): y is number => y !== null)
+  )).sort((a, b) => b - a);
+  if (!years.includes(year)) years.unshift(year);
 
-  // YTD stats
-  const ytdTotal   = currentYear.reduce((s, r) => s + r.amount, 0);
-  const ytdPickups = currentYear.reduce((s, r) => s + (r.pickups ?? 0), 0);
-  const ytdAvgPerPickup = ytdPickups > 0 ? ytdTotal / ytdPickups : null;
-  const vendorName = currentYear[0]?.vendor_name ?? all[0]?.vendor_name ?? null;
+  const amountsByAccountMonth = new Map<string, Record<number, number>>();
+  const invoiceByAccountMonth = new Map<string, { id: string; number: string | null }>();
+  for (const inv of invoices) {
+    if (!inv.date) continue;
+    const y = parseInt(inv.date.substring(0, 4), 10);
+    if (y !== year) continue;
+    const m = parseInt(inv.date.substring(5, 7), 10);
+    const bucket = amountsByAccountMonth.get(inv.account_id) ?? {};
+    bucket[m] = (bucket[m] ?? 0) + inv.amount;
+    amountsByAccountMonth.set(inv.account_id, bucket);
+    invoiceByAccountMonth.set(`${inv.account_id}:${m}`, {
+      id:     inv.id,
+      number: inv.invoice_number,
+    });
+  }
 
-  // Prior-year $/pickup baseline for the variance card
-  const priorYear = all.filter(r => r.invoice_date?.startsWith(String(year - 1)) && r.pickups);
-  const priorPickupsSum   = priorYear.reduce((s, r) => s + (r.pickups ?? 0), 0);
-  const priorAmountSum    = priorYear.reduce((s, r) => s + r.amount, 0);
-  const priorAvgPerPickup = priorPickupsSum > 0 ? priorAmountSum / priorPickupsSum : null;
-  const yoyChangePct =
-    ytdAvgPerPickup !== null && priorAvgPerPickup !== null
-      ? ((ytdAvgPerPickup - priorAvgPerPickup) / priorAvgPerPickup) * 100
-      : null;
+  // Pickup stats for the current year
+  const currentYearInvoices = invoices.filter(i => i.date?.startsWith(String(year)));
+  const ytdTotal   = currentYearInvoices.reduce((s, i) => s + i.amount, 0);
+  const ytdPickups = currentYearInvoices.reduce((s, i) => s + (i.pickups ?? 0), 0);
+  const avgPerPickup = ytdPickups > 0 ? ytdTotal / ytdPickups : null;
+
+  const priorYearInvoices = invoices.filter(i => i.date?.startsWith(String(year - 1)) && i.pickups);
+  const priorPickups = priorYearInvoices.reduce((s, i) => s + (i.pickups ?? 0), 0);
+  const priorTotal   = priorYearInvoices.reduce((s, i) => s + i.amount, 0);
+  const priorAvg     = priorPickups > 0 ? priorTotal / priorPickups : null;
+  const yoyPct = avgPerPickup !== null && priorAvg !== null
+    ? ((avgPerPickup - priorAvg) / priorAvg)
+    : null;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <TopBar
         title={`${property.name} · Trash`}
-        subtitle={
-          `${property.full_code}` +
-          (vendorName ? ` · ${vendorName}` : "") +
-          ` · ${currentYear.length} bills in ${year} · ${formatDollars(ytdTotal)}`
-        }
+        subtitle={`${property.full_code} · ${accounts.length} ${accounts.length === 1 ? "account" : "accounts"} · ${year} YTD ${formatDollars(ytdTotal)}`}
       />
 
-      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
-            ← Summary
-          </Link>
-          <div className="flex items-center gap-1 ml-4">
-            <span className="text-xs text-nurock-slate mr-2">Year:</span>
-            {years.map(y => (
-              <Link
-                key={y}
-                href={`/tracker/${property.code}/trash?year=${y}`}
-                className={
-                  "px-2 py-1 rounded text-xs " +
-                  (y === year ? "bg-nurock-navy text-white" : "text-nurock-navy hover:bg-nurock-flag-navy-bg")
-                }
-              >
-                {y}
-              </Link>
-            ))}
-          </div>
+      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center gap-2">
+        <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
+          ← Summary
+        </Link>
+        <div className="flex items-center gap-1 ml-4">
+          <span className="font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-nurock-slate mr-2">Year</span>
+          {years.map(y => (
+            <Link
+              key={y}
+              href={`/tracker/${property.code}/trash?year=${y}`}
+              className={
+                "px-2 py-1 rounded-md text-[11px] font-medium transition-colors " +
+                (y === year ? "bg-nurock-navy text-white" : "text-nurock-slate hover:bg-nurock-flag-navy-bg hover:text-nurock-navy")
+              }
+            >
+              {y}
+            </Link>
+          ))}
         </div>
       </div>
 
       <div className="flex-1 overflow-auto bg-nurock-bg">
-        <div className="px-8 py-6">
-          {currentYear.length === 0 && all.length === 0 && (
+        <div className="px-8 py-6 space-y-6 max-w-[1600px] mx-auto w-full">
+
+          {accounts.length === 0 ? (
             <div className="card p-8 text-center">
-              <div className="text-nurock-navy font-medium mb-2">No trash bills on file</div>
-              <div className="text-sm text-nurock-slate">
-                Trash invoices will appear here as they flow through the extraction pipeline.
+              <div className="text-nurock-black font-medium mb-2">No trash accounts on file</div>
+              <div className="text-[12.5px] text-nurock-slate-light">
+                Trash accounts are created automatically from the historical import
+                or as bills flow through the extraction pipeline.
               </div>
             </div>
-          )}
-
-          {currentYear.length === 0 && all.length > 0 && (
-            <div className="card p-6 text-center text-sm text-nurock-slate mb-4">
-              No trash bills in {year} — pick a different year above.
-            </div>
-          )}
-
-          {currentYear.length > 0 && (
+          ) : (
             <>
-              {/* KPI cards */}
-              <div className="grid grid-cols-4 gap-4 mb-6">
-                <StatCard label={`${year} total`} value={formatDollars(ytdTotal)} />
-                <StatCard label={`${year} pickups`} value={String(ytdPickups)} />
-                <StatCard
-                  label={`${year} avg $/pickup`}
-                  value={ytdAvgPerPickup !== null ? formatDollars(ytdAvgPerPickup) : "—"}
-                />
-                <StatCard
-                  label={`YoY $/pickup`}
-                  value={yoyChangePct !== null ? formatPercent(yoyChangePct / 100, { sign: true }) : "—"}
-                  sub={priorAvgPerPickup !== null ? `vs ${formatDollars(priorAvgPerPickup)} in ${year - 1}` : undefined}
-                  tone={
-                    yoyChangePct === null ? "neutral" :
-                    yoyChangePct >  3     ? "red"     :
-                    yoyChangePct < -3     ? "green"   : "neutral"
-                  }
-                />
+              {/* KPI strip */}
+              <div className="grid grid-cols-4 gap-3">
+                <div className="kpi-tile navy">
+                  <div className="kpi-label">{year} Total</div>
+                  <div className="kpi-value num">{formatDollars(ytdTotal)}</div>
+                </div>
+                <div className="kpi-tile">
+                  <div className="kpi-label">{year} Pickups</div>
+                  <div className="kpi-value num">{ytdPickups}</div>
+                </div>
+                <div className="kpi-tile">
+                  <div className="kpi-label">Avg $/pickup</div>
+                  <div className="kpi-value num">
+                    {avgPerPickup !== null ? formatDollars(avgPerPickup) : "—"}
+                  </div>
+                </div>
+                <div className={"kpi-tile " + (yoyPct === null ? "" : yoyPct > 0.03 ? "red" : yoyPct < -0.03 ? "green" : "")}>
+                  <div className="kpi-label">YoY $/pickup</div>
+                  <div className={"kpi-value num " + (yoyPct === null ? "" : yoyPct > 0.03 ? "text-flag-red" : yoyPct < -0.03 ? "text-flag-green" : "")}>
+                    {yoyPct !== null ? formatPercent(yoyPct, { sign: true }) : "—"}
+                  </div>
+                  {priorAvg !== null && (
+                    <div className="kpi-sub">vs {formatDollars(priorAvg)} in {year - 1}</div>
+                  )}
+                </div>
               </div>
 
-              {/* Bill-by-bill table */}
-              <div className="card overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-[#FAFBFC] text-nurock-slate text-[10px] uppercase tracking-[0.08em] font-display font-semibold">
-                    <tr>
-                      <th className="cell-head">Invoice date</th>
-                      <th className="cell-head">Service period</th>
-                      <th className="cell-head text-right">Pickups</th>
-                      <th className="cell-head text-right">Amount</th>
-                      <th className="cell-head text-right">$/pickup</th>
-                      <th className="cell-head text-right">Δ vs prior</th>
-                      <th className="cell-head">Invoice</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-nurock-border">
-                    {currentYear.map((r, idx) => {
-                      const perPickup = r.pickups && r.pickups > 0 ? r.amount / r.pickups : null;
+              {/* Per-account grid */}
+              <section>
+                <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-nurock-navy mb-3">
+                  Trash — GL 5135
+                </h2>
+                <PerAccountMonthlyGrid
+                  accounts={accounts}
+                  amountsByAccountMonth={amountsByAccountMonth}
+                  invoiceHrefByAccountMonth={invoiceByAccountMonth}
+                  leftHeader="Account #"
+                  middleHeader="Description"
+                />
+              </section>
 
-                      // Δ-vs-prior on a $/pickup basis — find the most recent prior bill
-                      // (chronologically) that also had a pickup count
-                      const chronoIdx = chronological.findIndex(c => c.id === r.id);
-                      const prior = [...chronological.slice(0, chronoIdx)]
-                        .reverse()
-                        .find(c => c.pickups && c.pickups > 0);
-                      const priorPer = prior && prior.pickups && prior.pickups > 0
-                        ? prior.amount / prior.pickups
-                        : null;
-                      const deltaPct =
-                        perPickup !== null && priorPer !== null && priorPer > 0
-                          ? ((perPickup - priorPer) / priorPer) * 100
-                          : null;
-
-                      return (
-                        <tr key={r.id} className="hover:bg-nurock-bg">
-                          <td className="cell num">
-                            {r.invoice_date ? formatDate(r.invoice_date) : "—"}
-                          </td>
-                          <td className="px-3 py-2 tabular-nums text-xs text-nurock-slate">
-                            {r.service_start && r.service_end
-                              ? `${formatDate(r.service_start)} – ${formatDate(r.service_end)}`
-                              : "—"}
-                          </td>
-                          <td className="cell text-right num">
-                            {r.pickups ?? <span className="text-nurock-slate-light">—</span>}
-                          </td>
-                          <td className="cell text-right num">
-                            {formatDollars(r.amount)}
-                          </td>
-                          <td className="cell text-right num">
-                            {perPickup !== null ? formatDollars(perPickup) : <span className="text-nurock-slate-light">—</span>}
-                          </td>
-                          <td className={
-                            "px-3 py-2 text-right tabular-nums " +
-                            (deltaPct === null ? "text-nurock-slate-light" :
-                             deltaPct > 3      ? "text-flag-red font-medium" :
-                             deltaPct < -3     ? "text-flag-green"            : "text-nurock-slate")
-                          }>
-                            {deltaPct !== null ? formatPercent(deltaPct / 100, { sign: true }) : "—"}
-                          </td>
-                          <td className="cell">
-                            <Link
-                              href={`/invoices/${r.id}`}
-                              className="text-nurock-navy hover:underline font-mono"
-                            >
-                              {r.invoice_number}
-                            </Link>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot className="bg-nurock-flag-navy-bg font-medium">
-                    <tr>
-                      <td className="cell" colSpan={2}>{year} total</td>
-                      <td className="cell text-right num">{ytdPickups}</td>
-                      <td className="cell text-right num">{formatDollars(ytdTotal)}</td>
-                      <td className="cell text-right num">
-                        {ytdAvgPerPickup !== null ? formatDollars(ytdAvgPerPickup) : "—"}
-                      </td>
-                      <td colSpan={2} />
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-
-              <p className="text-xs text-nurock-slate-light mt-4">
-                Δ vs prior compares each bill&apos;s cost-per-pickup to the most recent
-                preceding bill with a pickup count — flags red above 3%, green below -3%.
-                A high-dollar bill with proportionally more pickups should come out flat,
-                not flagged, which is the whole point of normalizing by pickup count.
-                Historical bills (invoice numbers starting
-                <span className="font-mono"> HIST-T-</span>) come from the legacy
-                Garbage sheet.
+              <p className="text-[11px] text-nurock-slate-light">
+                Each cell links to the underlying trash invoice for that account × month.
+                Historical bills have invoice numbers starting with <span className="font-mono">HIST-T-</span>.
+                Pickup counts feed the $/pickup variance calculation — a higher bill explained
+                by more pickups won&apos;t trigger a false flag.
               </p>
             </>
           )}
@@ -261,32 +200,4 @@ export default async function TrashDetailPage({
       </div>
     </div>
   );
-}
-
-function StatCard({
-  label, value, sub, tone = "neutral",
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  tone?: "neutral" | "red" | "green";
-}) {
-  const valueCls =
-    tone === "red"   ? "text-flag-red"   :
-    tone === "green" ? "text-flag-green" : "text-nurock-black";
-  const tileTone =
-    tone === "red"   ? "red"   :
-    tone === "green" ? "green" : "navy";
-  return (
-    <div className={`kpi-tile ${tileTone}`}>
-      <div className="kpi-label">{label}</div>
-      <div className={`kpi-value num ${valueCls}`}>{value}</div>
-      {sub && <div className="kpi-sub">{sub}</div>}
-    </div>
-  );
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${String(d.getUTCFullYear()).slice(-2)}`;
 }

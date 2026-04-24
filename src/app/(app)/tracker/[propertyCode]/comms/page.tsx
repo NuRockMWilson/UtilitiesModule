@@ -3,14 +3,12 @@ import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/layout/TopBar";
 import { formatDollars } from "@/lib/format";
+import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
 
 /**
- * Combined Phone + Cable detail page. Both categories share the same layout
- * and the same rhythm (monthly, fairly stable, vendor-contractual), so it
- * reads better as one page with two stacked tables than as two near-identical
- * pages a click apart.
- *
- * GLs: 5635 (phone/telephone) and 5140 (cable TV)
+ * Combined Phone + Cable detail page. Per-account monthly grid for both
+ * GL 5635 (Phone) and GL 5140 (Cable), matching the legacy Phone&Cable
+ * sheet layout where each vendor account gets its own line.
  */
 export default async function CommsDetailPage({
   params,
@@ -26,200 +24,181 @@ export default async function CommsDetailPage({
     .select("id, code, name, full_code")
     .eq("code", params.propertyCode)
     .single();
-
   if (!property) notFound();
 
   const year = searchParams.year ? parseInt(searchParams.year, 10) : new Date().getFullYear();
 
-  const { data: rowsRaw } = await supabase
-    .from("invoices")
+  const { data: acctRaw } = await supabase
+    .from("utility_accounts")
     .select(`
-      id, invoice_number, invoice_date,
-      service_period_start, service_period_end,
-      total_amount_due, status,
-      vendors ( name ),
-      gl_accounts!inner ( code, description )
+      id, account_number, description,
+      gl_accounts!inner ( code ),
+      vendors ( name )
     `)
     .eq("property_id", property.id)
-    .in("gl_accounts.code", ["5635", "5140"])
-    .order("invoice_date", { ascending: false });
+    .eq("active", true)
+    .in("gl_accounts.code", ["5140", "5635"]);
 
-  const all = (rowsRaw ?? []).map((r: any) => ({
-    id:             r.id,
-    invoice_number: r.invoice_number as string,
-    invoice_date:   r.invoice_date   as string | null,
-    service_start:  r.service_period_start as string | null,
-    service_end:    r.service_period_end   as string | null,
-    amount:         Number(r.total_amount_due ?? 0),
-    status:         r.status as string,
-    gl_code:        r.gl_accounts?.code as string,
-    vendor_name:    r.vendors?.name ?? null,
+  const accountsByGL: Record<string, AccountRow[]> = { "5635": [], "5140": [] };
+  for (const a of (acctRaw ?? []) as any[]) {
+    const gl = a.gl_accounts?.code as string;
+    if (gl !== "5140" && gl !== "5635") continue;
+    accountsByGL[gl].push({
+      id:             a.id,
+      account_number: a.account_number,
+      description:    a.description,
+      vendor_name:    a.vendors?.name ?? null,
+    });
+  }
+
+  const allAccounts = [...accountsByGL["5635"], ...accountsByGL["5140"]];
+  const accountIds = allAccounts.map(a => a.id);
+
+  const { data: invRaw } = accountIds.length
+    ? await supabase
+        .from("invoices")
+        .select("id, invoice_number, utility_account_id, invoice_date, total_amount_due")
+        .in("utility_account_id", accountIds)
+    : { data: [] };
+
+  const invoices = (invRaw ?? []).map((i: any) => ({
+    id:             i.id as string,
+    invoice_number: i.invoice_number as string | null,
+    account_id:     i.utility_account_id as string,
+    date:           i.invoice_date as string | null,
+    amount:         Number(i.total_amount_due ?? 0),
   }));
 
-  const years = Array.from(new Set(all.map(r =>
-    r.invoice_date ? parseInt(r.invoice_date.substring(0, 4), 10) : null
-  ).filter((y): y is number => y !== null))).sort((a, b) => b - a);
+  const years = Array.from(new Set(
+    invoices.map(i => i.date ? parseInt(i.date.substring(0, 4), 10) : null)
+           .filter((y): y is number => y !== null)
+  )).sort((a, b) => b - a);
+  if (!years.includes(year)) years.unshift(year);
 
-  const currentYear = all.filter(r => r.invoice_date?.startsWith(String(year)));
-  const phone = currentYear.filter(r => r.gl_code === "5635");
-  const cable = currentYear.filter(r => r.gl_code === "5140");
+  const amountsByAccountMonth = new Map<string, Record<number, number>>();
+  const invoiceByAccountMonth = new Map<string, { id: string; number: string | null }>();
+  for (const inv of invoices) {
+    if (!inv.date) continue;
+    const y = parseInt(inv.date.substring(0, 4), 10);
+    if (y !== year) continue;
+    const m = parseInt(inv.date.substring(5, 7), 10);
+    const bucket = amountsByAccountMonth.get(inv.account_id) ?? {};
+    bucket[m] = (bucket[m] ?? 0) + inv.amount;
+    amountsByAccountMonth.set(inv.account_id, bucket);
+    invoiceByAccountMonth.set(`${inv.account_id}:${m}`, {
+      id:     inv.id,
+      number: inv.invoice_number,
+    });
+  }
 
-  const phoneTotal = phone.reduce((s, r) => s + r.amount, 0);
-  const cableTotal = cable.reduce((s, r) => s + r.amount, 0);
-  const totalYTD   = phoneTotal + cableTotal;
+  const ytdForAccounts = (accts: AccountRow[]) =>
+    accts.reduce((sum, a) => {
+      const bucket = amountsByAccountMonth.get(a.id) ?? {};
+      return sum + Object.values(bucket).reduce((s, v) => s + v, 0);
+    }, 0);
 
-  // Monthly rollup per category
-  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const monthlyTotal = (rows: typeof all, monthIdx: number): number =>
-    rows
-      .filter(r => r.invoice_date?.substring(5, 7) === String(monthIdx + 1).padStart(2, "0"))
-      .reduce((s, r) => s + r.amount, 0);
+  const phoneYtd = ytdForAccounts(accountsByGL["5635"]);
+  const cableYtd = ytdForAccounts(accountsByGL["5140"]);
+  const totalYtd = phoneYtd + cableYtd;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <TopBar
         title={`${property.name} · Phone & Cable`}
-        subtitle={`${property.full_code} · ${year} YTD ${formatDollars(totalYTD)} (Phone ${formatDollars(phoneTotal)} · Cable ${formatDollars(cableTotal)})`}
+        subtitle={`${property.full_code} · ${allAccounts.length} accounts · ${year} YTD ${formatDollars(totalYtd)}`}
       />
 
-      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
-            ← Summary
-          </Link>
-          <div className="flex items-center gap-1 ml-4">
-            <span className="text-xs text-nurock-slate mr-2">Year:</span>
-            {years.map(y => (
-              <Link
-                key={y}
-                href={`/tracker/${property.code}/comms?year=${y}`}
-                className={"px-2 py-1 rounded text-xs " + (y === year ? "bg-nurock-navy text-white" : "text-nurock-navy hover:bg-nurock-flag-navy-bg")}
-              >
-                {y}
-              </Link>
-            ))}
-          </div>
+      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center gap-2">
+        <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
+          ← Summary
+        </Link>
+        <div className="flex items-center gap-1 ml-4">
+          <span className="font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-nurock-slate mr-2">Year</span>
+          {years.map(y => (
+            <Link
+              key={y}
+              href={`/tracker/${property.code}/comms?year=${y}`}
+              className={
+                "px-2 py-1 rounded-md text-[11px] font-medium transition-colors " +
+                (y === year ? "bg-nurock-navy text-white" : "text-nurock-slate hover:bg-nurock-flag-navy-bg hover:text-nurock-navy")
+              }
+            >
+              {y}
+            </Link>
+          ))}
         </div>
       </div>
 
       <div className="flex-1 overflow-auto bg-nurock-bg">
-        <div className="px-8 py-6">
-          {currentYear.length === 0 ? (
+        <div className="px-8 py-6 space-y-6 max-w-[1600px] mx-auto w-full">
+
+          {allAccounts.length === 0 ? (
             <div className="card p-8 text-center">
-              <div className="text-nurock-navy font-medium mb-2">No phone or cable bills on file for {year}</div>
-              <div className="text-sm text-nurock-slate">
-                {all.length > 0 ? "Pick a different year above." : "Phone and cable bills will appear here as they flow through the extraction pipeline."}
+              <div className="text-nurock-black font-medium mb-2">No phone or cable accounts on file</div>
+              <div className="text-[12.5px] text-nurock-slate-light">
+                Phone and cable accounts are created automatically from the historical
+                import or as bills flow through the extraction pipeline.
               </div>
             </div>
           ) : (
-            <div className="space-y-8">
-              <CategoryTable
-                title="Phone (GL 5635)"
-                rows={phone}
-                total={phoneTotal}
-                monthly={MONTHS.map((_, i) => monthlyTotal(phone, i))}
-              />
-              <CategoryTable
-                title="Cable (GL 5140)"
-                rows={cable}
-                total={cableTotal}
-                monthly={MONTHS.map((_, i) => monthlyTotal(cable, i))}
-              />
-            </div>
+            <>
+              {/* KPI strip */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="kpi-tile navy">
+                  <div className="kpi-label">{year} Total</div>
+                  <div className="kpi-value num">{formatDollars(totalYtd)}</div>
+                </div>
+                <div className="kpi-tile">
+                  <div className="kpi-label">Phone (5635)</div>
+                  <div className="kpi-value num">{formatDollars(phoneYtd)}</div>
+                  <div className="kpi-sub">{accountsByGL["5635"].length} {accountsByGL["5635"].length === 1 ? "account" : "accounts"}</div>
+                </div>
+                <div className="kpi-tile">
+                  <div className="kpi-label">Cable (5140)</div>
+                  <div className="kpi-value num">{formatDollars(cableYtd)}</div>
+                  <div className="kpi-sub">{accountsByGL["5140"].length} {accountsByGL["5140"].length === 1 ? "account" : "accounts"}</div>
+                </div>
+              </div>
+
+              {accountsByGL["5635"].length > 0 && (
+                <section>
+                  <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-nurock-navy mb-3">
+                    Phone — GL 5635
+                  </h2>
+                  <PerAccountMonthlyGrid
+                    accounts={accountsByGL["5635"]}
+                    amountsByAccountMonth={amountsByAccountMonth}
+                    invoiceHrefByAccountMonth={invoiceByAccountMonth}
+                    leftHeader="Account #"
+                    middleHeader="Vendor / Description"
+                  />
+                </section>
+              )}
+
+              {accountsByGL["5140"].length > 0 && (
+                <section>
+                  <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-nurock-navy mb-3">
+                    Cable — GL 5140
+                  </h2>
+                  <PerAccountMonthlyGrid
+                    accounts={accountsByGL["5140"]}
+                    amountsByAccountMonth={amountsByAccountMonth}
+                    invoiceHrefByAccountMonth={invoiceByAccountMonth}
+                    leftHeader="Account #"
+                    middleHeader="Vendor / Description"
+                  />
+                </section>
+              )}
+
+              <p className="text-[11px] text-nurock-slate-light">
+                Each cell links to the underlying bill for that account × month.
+                Historical rollups have invoice numbers starting with{" "}
+                <span className="font-mono">HIST-PHONE-</span> or <span className="font-mono">HIST-CABLE-</span>.
+              </p>
+            </>
           )}
-
-          <p className="text-xs text-nurock-slate-light mt-6">
-            Historical phone/cable totals (invoice numbers starting{" "}
-            <span className="font-mono">HIST-PHONE-</span> or{" "}
-            <span className="font-mono">HIST-CABLE-</span>) are monthly rollups from
-            the legacy Phone&amp;Cable sheet — they represent the summed line items
-            (multiple accounts per vendor) that historically posted to these GLs.
-            New phone/cable bills processed through extraction will appear as
-            individual invoices with vendor-level detail.
-          </p>
         </div>
       </div>
     </div>
   );
-}
-
-function CategoryTable({
-  title, rows, total, monthly,
-}: {
-  title: string;
-  rows:  Array<{ id: string; invoice_number: string; invoice_date: string | null;
-                 service_start: string | null; service_end: string | null;
-                 amount: number; vendor_name: string | null }>;
-  total: number;
-  monthly: number[];
-}) {
-  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  return (
-    <div>
-      <h2 className="font-display text-lg font-semibold text-nurock-black mb-2">{title}</h2>
-
-      {/* Monthly strip */}
-      <div className="card overflow-hidden mb-3">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-xs text-nurock-slate border-b border-nurock-border">
-              {MONTHS.map(m => <th key={m} className="cell-head text-center">{m}</th>)}
-              <th className="px-2 py-2 text-right font-medium bg-[#FAFBFC]">YTD</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              {monthly.map((v, i) => (
-                <td key={i} className="px-2 py-2 text-center tabular-nums">
-                  {v > 0 ? formatDollars(v) : <span className="text-nurock-slate-light">—</span>}
-                </td>
-              ))}
-              <td className="px-2 py-2 text-right tabular-nums font-medium bg-[#FAFBFC]">
-                {formatDollars(total)}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      {/* Invoice list */}
-      {rows.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-[#FAFBFC] text-nurock-slate text-[10px] uppercase tracking-[0.08em] font-display font-semibold">
-              <tr>
-                <th className="cell-head">Invoice date</th>
-                <th className="cell-head">Service period</th>
-                <th className="cell-head">Vendor</th>
-                <th className="cell-head text-right">Amount</th>
-                <th className="cell-head">Invoice #</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-nurock-border">
-              {rows.map(r => (
-                <tr key={r.id} className="hover:bg-nurock-bg">
-                  <td className="cell num">{r.invoice_date ? formatDate(r.invoice_date) : "—"}</td>
-                  <td className="px-3 py-2 tabular-nums text-xs text-nurock-slate">
-                    {r.service_start && r.service_end ? `${formatDate(r.service_start)} – ${formatDate(r.service_end)}` : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-nurock-slate">{r.vendor_name ?? "—"}</td>
-                  <td className="cell text-right num">{formatDollars(r.amount)}</td>
-                  <td className="cell">
-                    <Link href={`/invoices/${r.id}`} className="text-nurock-navy hover:underline font-mono">
-                      {r.invoice_number}
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${String(d.getUTCFullYear()).slice(-2)}`;
 }

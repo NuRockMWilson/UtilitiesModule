@@ -3,16 +3,32 @@ import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/layout/TopBar";
 import { formatDollars, formatPercent } from "@/lib/format";
+import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
 
 /**
- * House Meters detail page. Shows every electric meter at a property and its
- * monthly history, matching the legacy "House Meters" sheet layout:
+ * House Meters detail page. Shows every electric meter at the property with
+ * monthly spend per meter. Matches the legacy "House Meters" sheet layout:
  *
- *   Meter / Description | Category | Jan | Feb | ... | Dec | YTD
+ *   Account # | Meter / Description | Jan | Feb | ... | Dec | YTD
  *
- * Each meter has its own utility_accounts row, so variance analysis surfaces
- * per-meter anomalies ("Pool pump +23%") instead of only per-property totals.
+ * Electric GLs: 5112 (house), 5116 (clubhouse). Vacant electric (5114) lives
+ * on its own Vacant Units page.
  */
+
+const CATEGORY_LABELS: Record<string, string> = {
+  house:      "House",
+  clubhouse:  "Clubhouse",
+  pool:       "Pool",
+  trash:      "Trash compactor",
+  lighting:   "Lighting",
+  irrigation: "Irrigation",
+  laundry:    "Laundry",
+  gate:       "Gate",
+  sign:       "Sign",
+  leasing:    "Leasing office",
+  other:      "Other",
+};
+
 export default async function MetersDetailPage({
   params,
   searchParams,
@@ -27,270 +43,160 @@ export default async function MetersDetailPage({
     .select("id, code, name, full_code")
     .eq("code", params.propertyCode)
     .single();
-
   if (!property) notFound();
 
   const year = searchParams.year ? parseInt(searchParams.year, 10) : new Date().getFullYear();
 
-  // All electric meters at this property (GL 5112 house, 5114 vacant, 5116 clubhouse)
-  const { data: metersRaw } = await supabase
+  const { data: acctRaw } = await supabase
     .from("utility_accounts")
     .select(`
       id, account_number, description, meter_id, esi_id, meter_category,
-      gl_accounts ( code ),
+      gl_accounts!inner ( code ),
       vendors ( name )
     `)
     .eq("property_id", property.id)
     .eq("active", true)
-    .in("gl_accounts.code", ["5112", "5114", "5116"])
-    .order("meter_category", { ascending: true });
+    .in("gl_accounts.code", ["5112", "5116"]);
 
-  const meters = (metersRaw ?? []).filter((m: any) => m.gl_accounts);
+  const accounts: AccountRow[] = (acctRaw ?? []).map((a: any) => ({
+    id:             a.id,
+    account_number: a.account_number,
+    description:    a.description,
+    meter_id:       a.meter_id,
+    esi_id:         a.esi_id,
+    category:       a.meter_category ? (CATEGORY_LABELS[a.meter_category] ?? a.meter_category) : null,
+    vendor_name:    a.vendors?.name ?? null,
+  }));
 
-  // For each meter, pull the invoice history. One query covering all of them
-  // (filtered by utility_account_id in clause) is more efficient than N queries.
-  const meterIds = meters.map((m: any) => m.id);
-
-  const { data: invoicesRaw } = meterIds.length
+  const accountIds = accounts.map(a => a.id);
+  const { data: invRaw } = accountIds.length
     ? await supabase
         .from("invoices")
-        .select(`
-          id, utility_account_id, invoice_number,
-          service_period_start, service_period_end, service_days,
-          total_amount_due, invoice_date, status
-        `)
-        .in("utility_account_id", meterIds)
-        .order("invoice_date", { ascending: false })
+        .select("id, invoice_number, utility_account_id, invoice_date, total_amount_due")
+        .in("utility_account_id", accountIds)
     : { data: [] };
 
-  // Group invoices by meter id and year/month
-  type Invoice = {
-    id: string;
-    invoice_number: string | null;
-    service_period_start: string | null;
-    service_period_end:   string | null;
-    service_days: number | null;
-    total_amount_due: number;
-    invoice_date: string | null;
-  };
+  const invoices = (invRaw ?? []).map((i: any) => ({
+    id:             i.id as string,
+    invoice_number: i.invoice_number as string | null,
+    account_id:     i.utility_account_id as string,
+    date:           i.invoice_date as string | null,
+    amount:         Number(i.total_amount_due ?? 0),
+  }));
 
-  const invoicesByMeter = new Map<string, Invoice[]>();
-  for (const raw of (invoicesRaw ?? []) as any[]) {
-    const list = invoicesByMeter.get(raw.utility_account_id) ?? [];
-    list.push({
-      id:                   raw.id,
-      invoice_number:       raw.invoice_number,
-      service_period_start: raw.service_period_start,
-      service_period_end:   raw.service_period_end,
-      service_days:         raw.service_days,
-      total_amount_due:     Number(raw.total_amount_due ?? 0),
-      invoice_date:         raw.invoice_date,
+  const years = Array.from(new Set(
+    invoices.map(i => i.date ? parseInt(i.date.substring(0, 4), 10) : null)
+           .filter((y): y is number => y !== null)
+  )).sort((a, b) => b - a);
+  if (!years.includes(year)) years.unshift(year);
+
+  const amountsByAccountMonth = new Map<string, Record<number, number>>();
+  const invoiceByAccountMonth = new Map<string, { id: string; number: string | null }>();
+  for (const inv of invoices) {
+    if (!inv.date) continue;
+    const y = parseInt(inv.date.substring(0, 4), 10);
+    if (y !== year) continue;
+    const m = parseInt(inv.date.substring(5, 7), 10);
+    const bucket = amountsByAccountMonth.get(inv.account_id) ?? {};
+    bucket[m] = (bucket[m] ?? 0) + inv.amount;
+    amountsByAccountMonth.set(inv.account_id, bucket);
+    invoiceByAccountMonth.set(`${inv.account_id}:${m}`, {
+      id:     inv.id,
+      number: inv.invoice_number,
     });
-    invoicesByMeter.set(raw.utility_account_id, list);
   }
 
-  // For the summary grid, build a { meterId: { month: amount } } table for the selected year
-  const ytdByMeter: Record<string, { monthly: (number | null)[]; ytd: number }> = {};
-  for (const m of meters) {
-    const monthly: (number | null)[] = new Array(12).fill(null);
-    const invoices = invoicesByMeter.get(m.id) ?? [];
-    for (const inv of invoices) {
-      if (!inv.invoice_date) continue;
-      const y = parseInt(inv.invoice_date.substring(0, 4), 10);
-      const mo = parseInt(inv.invoice_date.substring(5, 7), 10);
-      if (y === year && mo >= 1 && mo <= 12) {
-        monthly[mo - 1] = (monthly[mo - 1] ?? 0) + inv.total_amount_due;
-      }
-    }
-    const ytd = monthly.reduce<number>((s, v) => s + (v ?? 0), 0);
-    ytdByMeter[m.id] = { monthly, ytd };
+  const ytdByAccount = new Map<string, number>();
+  for (const [acctId, bucket] of amountsByAccountMonth) {
+    ytdByAccount.set(acctId, Object.values(bucket).reduce((s, v) => s + v, 0));
   }
 
-  // Category totals — how much the property spends on pool vs. lighting vs. house, etc.
+  // Category rollup KPIs
   const categoryTotals = new Map<string, number>();
-  for (const m of meters) {
-    const cat = (m as any).meter_category || "other";
-    const ytd = ytdByMeter[m.id]?.ytd ?? 0;
-    categoryTotals.set(cat, (categoryTotals.get(cat) ?? 0) + ytd);
+  for (const a of accounts) {
+    const cat = a.category ?? "Other";
+    categoryTotals.set(cat, (categoryTotals.get(cat) ?? 0) + (ytdByAccount.get(a.id) ?? 0));
   }
-
-  const propertyYtdTotal = Array.from(categoryTotals.values()).reduce((a, b) => a + b, 0);
-
-  // Year picker
-  const invoiceDates = (invoicesRaw ?? []).map((i: any) => i.invoice_date).filter(Boolean) as string[];
-  const years = Array.from(new Set(invoiceDates.map(d => parseInt(d.substring(0, 4), 10))))
-    .sort((a, b) => b - a);
-
-  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-  const categoryLabels: Record<string, string> = {
-    house:      "House",
-    clubhouse:  "Clubhouse",
-    pool:       "Pool",
-    trash:      "Trash compactor",
-    lighting:   "Lighting",
-    irrigation: "Irrigation",
-    laundry:    "Laundry",
-    gate:       "Gate",
-    sign:       "Sign",
-    leasing:    "Leasing office",
-    other:      "Other",
-  };
+  const propertyYtd = Array.from(categoryTotals.values()).reduce((a, b) => a + b, 0);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <TopBar
         title={`${property.name} · House meters`}
-        subtitle={`${property.full_code} · ${meters.length} meters · ${year} YTD ${formatDollars(propertyYtdTotal)}`}
+        subtitle={`${property.full_code} · ${accounts.length} meters · ${year} YTD ${formatDollars(propertyYtd)}`}
       />
 
-      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
-            ← Summary
-          </Link>
-          <Link href={`/tracker/${property.code}/water?year=${year}`} className="btn-secondary">
-            Water detail
-          </Link>
-          <div className="flex items-center gap-1 ml-4">
-            <span className="text-xs text-nurock-slate mr-2">Year:</span>
-            {years.map(y => (
-              <Link
-                key={y}
-                href={`/tracker/${property.code}/meters?year=${y}`}
-                className={
-                  "px-2 py-1 rounded text-xs " +
-                  (y === year ? "bg-nurock-navy text-white" : "text-nurock-navy hover:bg-nurock-flag-navy-bg")
-                }
-              >
-                {y}
-              </Link>
-            ))}
-          </div>
+      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center gap-2">
+        <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
+          ← Summary
+        </Link>
+        <div className="flex items-center gap-1 ml-4">
+          <span className="font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-nurock-slate mr-2">Year</span>
+          {years.map(y => (
+            <Link
+              key={y}
+              href={`/tracker/${property.code}/meters?year=${y}`}
+              className={
+                "px-2 py-1 rounded-md text-[11px] font-medium transition-colors " +
+                (y === year ? "bg-nurock-navy text-white" : "text-nurock-slate hover:bg-nurock-flag-navy-bg hover:text-nurock-navy")
+              }
+            >
+              {y}
+            </Link>
+          ))}
         </div>
       </div>
 
       <div className="flex-1 overflow-auto bg-nurock-bg">
-        <div className="px-8 py-6">
-          {meters.length === 0 && (
+        <div className="px-8 py-6 space-y-6 max-w-[1600px] mx-auto w-full">
+
+          {accounts.length === 0 ? (
             <div className="card p-8 text-center">
-              <div className="text-nurock-navy font-medium mb-2">No electric meters on file</div>
-              <div className="text-sm text-nurock-slate">
-                This property has no electric meters set up yet. Meters are created
-                automatically from the historical import or as bills flow through
-                the extraction pipeline. You can also add them manually under
-                Admin → Utility Accounts.
+              <div className="text-nurock-black font-medium mb-2">No electric meters on file</div>
+              <div className="text-[12.5px] text-nurock-slate-light">
+                Meters are created automatically from the historical import
+                or as bills flow through the extraction pipeline.
               </div>
             </div>
-          )}
-
-          {meters.length > 0 && (
+          ) : (
             <>
-              {/* Category breakdown */}
-              <div className="grid grid-cols-4 gap-3 mb-6">
-                {Array.from(categoryTotals.entries())
-                  .sort((a, b) => b[1] - a[1])
-                  .slice(0, 4)
-                  .map(([cat, total]) => (
-                    <div key={cat} className="kpi-tile navy">
-                      <div className="kpi-label">
-                        {categoryLabels[cat] || cat}
+              {/* Category rollup — top 4 by spend */}
+              {categoryTotals.size > 0 && (
+                <div className="grid grid-cols-4 gap-3">
+                  {Array.from(categoryTotals.entries())
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 4)
+                    .map(([cat, total]) => (
+                      <div key={cat} className="kpi-tile navy">
+                        <div className="kpi-label">{cat}</div>
+                        <div className="kpi-value num">{formatDollars(total)}</div>
+                        <div className="kpi-sub num">
+                          {propertyYtd > 0 ? formatPercent(total / propertyYtd) : "—"} of total
+                        </div>
                       </div>
-                      <div className="kpi-value num">
-                        {formatDollars(total)}
-                      </div>
-                      <div className="kpi-sub num">
-                        {propertyYtdTotal > 0
-                          ? formatPercent(total / propertyYtdTotal)
-                          : "—"} of total
-                      </div>
-                    </div>
-                  ))}
-              </div>
+                    ))}
+                </div>
+              )}
 
-              {/* Per-meter monthly grid */}
-              <div className="card overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-[#FAFBFC] text-nurock-slate text-[10px] uppercase tracking-[0.08em] font-display font-semibold">
-                    <tr>
-                      <th className="cell-head sticky left-0 z-10">
-                        Meter
-                      </th>
-                      <th className="cell-head">Category</th>
-                      <th className="cell-head">Account</th>
-                      {MONTHS.map(m => (
-                        <th key={m} className="cell-head text-right">
-                          {m}
-                        </th>
-                      ))}
-                      <th className="px-3 py-2 text-right font-medium bg-nurock-flag-navy-bg">
-                        YTD
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-nurock-border">
-                    {meters.map((m: any) => {
-                      const row = ytdByMeter[m.id];
-                      const cat = m.meter_category || "other";
-                      const meterLabel = m.description || m.meter_id || m.account_number || "Unnamed meter";
-                      return (
-                        <tr key={m.id} className="hover:bg-nurock-bg">
-                          <td className="cell sticky left-0 bg-white z-10">
-                            {meterLabel}
-                            {m.meter_id && m.description !== m.meter_id && (
-                              <div className="text-xs text-nurock-slate-light font-mono">
-                                {m.meter_id}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 text-xs text-nurock-slate">
-                            {categoryLabels[cat] || cat}
-                          </td>
-                          <td className="px-3 py-2 text-xs font-mono text-nurock-slate">
-                            {m.account_number}
-                          </td>
-                          {(row?.monthly ?? new Array(12).fill(null)).map((v, i) => (
-                            <td key={i} className="cell text-right num">
-                              {v !== null ? formatDollars(v) : <span className="text-nurock-slate-light">—</span>}
-                            </td>
-                          ))}
-                          <td className="px-3 py-2 text-right tabular-nums font-medium bg-[#FAFBFC]">
-                            {row?.ytd ? formatDollars(row.ytd) : <span className="text-nurock-slate-light">—</span>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot className="bg-nurock-flag-navy-bg font-medium">
-                    <tr>
-                      <td className="px-3 py-2 sticky left-0 bg-nurock-flag-navy-bg z-10">
-                        Total — {meters.length} meters
-                      </td>
-                      <td></td>
-                      <td></td>
-                      {MONTHS.map((_, i) => {
-                        const monthTotal = meters.reduce((s: number, m: any) =>
-                          s + (ytdByMeter[m.id]?.monthly[i] ?? 0), 0);
-                        return (
-                          <td key={i} className="cell text-right num">
-                            {monthTotal > 0 ? formatDollars(monthTotal) : ""}
-                          </td>
-                        );
-                      })}
-                      <td className="cell text-right num">
-                        {formatDollars(propertyYtdTotal)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
+              {/* Per-account grid */}
+              <section>
+                <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-nurock-navy mb-3">
+                  Meters — GL 5112 / 5116
+                </h2>
+                <PerAccountMonthlyGrid
+                  accounts={accounts}
+                  amountsByAccountMonth={amountsByAccountMonth}
+                  invoiceHrefByAccountMonth={invoiceByAccountMonth}
+                  leftHeader="Account #"
+                  middleHeader="Meter / Description"
+                  showCategory
+                />
+              </section>
 
-              <p className="text-xs text-nurock-slate-light mt-4">
-                Meters are grouped by category for fast visual comparison. Variance analysis
-                runs per-meter — anomalies on the pool pump or clubhouse meter surface
-                directly instead of being hidden in the property total. Historical meter
-                invoices (marked <span className="font-mono">HIST-M-</span>) come from the
-                legacy House Meters sheet; new meter bills append as they're processed.
+              <p className="text-[11px] text-nurock-slate-light">
+                Each cell links to the underlying invoice for that meter × month.
+                Historical meter bills have invoice numbers starting with{" "}
+                <span className="font-mono">HIST-M-</span>.
               </p>
             </>
           )}
