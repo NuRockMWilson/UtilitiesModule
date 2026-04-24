@@ -159,3 +159,170 @@ export function varianceFlag(r: VarianceResult, thresholdPct: number): "green" |
   if (r.variancePct > thresholdPct) return "yellow";
   return "green";
 }
+
+// ============================================================================
+// Per-line-item variance (Priority 1 enhancement)
+// ============================================================================
+// When invoice_line_items is populated, variance analysis runs per category
+// (water / sewer / irrigation) rather than on the lumped invoice total. Two
+// reasons this is better:
+//
+//   1. Consumption-driven lines (water, sewer, irrigation) behave very
+//      differently from flat fees (storm water, environmental protection).
+//      A 10% consumption drop hidden by a 5% fee increase would slip past
+//      per-invoice variance today.
+//   2. Per-category variance points directly at the anomaly: "Sewer +18% vs
+//      12-mo baseline" is actionable where "Water bill total +6%" is not.
+//
+// Lines with is_consumption_based=false (flat fees) are excluded from variance
+// altogether — they're flat by definition, so variance on them is noise.
+
+export interface LineItem {
+  category: string;               // 'water' | 'sewer' | 'irrigation' | fee categories
+  amount: number;
+  is_consumption_based: boolean;
+}
+
+export interface LineItemInvoice {
+  id: string;
+  service_period_start: Date | string | null;
+  service_period_end:   Date | string | null;
+  service_days: number | null;
+  exclude_from_baseline: boolean;
+  variance_flagged: boolean;
+  variance_explanation: string | null;
+  line_items: LineItem[];
+}
+
+export interface CategoryVarianceInput {
+  currentDays:    number | null;
+  currentLines:   LineItem[];
+  priorInvoices:  LineItemInvoice[];
+  thresholdPct:   number;
+  windowMonths:   number;
+  asOf?:          Date;
+}
+
+export interface CategoryVarianceResult {
+  category:           string;
+  baseline:           number | null;   // daily dollars for this category
+  baselineSampleSize: number;
+  currentValue:       number | null;   // daily dollars this bill for this category
+  variancePct:        number | null;
+  flagged:            boolean;
+  reason?:            string;
+}
+
+/**
+ * Compute variance per consumption-based category. Returns one result per
+ * category present in the current bill's line items (skipping flat fees).
+ *
+ * Baseline for each category = mean of prior invoices' daily dollars for that
+ * same category, using the same exclusion rules as the per-invoice baseline
+ * (no excluded-from-baseline, no flagged-but-unexplained).
+ */
+export function computeCategoryVariance(
+  input: CategoryVarianceInput,
+): CategoryVarianceResult[] {
+  const asOf = input.asOf ?? new Date();
+  const windowStart = new Date(asOf);
+  windowStart.setMonth(windowStart.getMonth() - input.windowMonths);
+
+  // Only analyze consumption-based categories from the current bill
+  const currentByCategory = new Map<string, number>();
+  for (const li of input.currentLines) {
+    if (!li.is_consumption_based) continue;
+    currentByCategory.set(li.category, (currentByCategory.get(li.category) ?? 0) + li.amount);
+  }
+
+  if (currentByCategory.size === 0) return [];
+
+  // Filter prior invoices to the baseline window and exclude polluted rows
+  const eligible = input.priorInvoices
+    .filter(p => !p.exclude_from_baseline)
+    .filter(p => !(p.variance_flagged && !p.variance_explanation))
+    .filter(p => inWindow(p.service_period_end, windowStart, asOf));
+
+  const results: CategoryVarianceResult[] = [];
+
+  for (const [category, currentAmount] of currentByCategory.entries()) {
+    // Daily dollars for this category on each prior invoice
+    const sample = eligible
+      .map(p => {
+        if (!p.service_days || p.service_days <= 0) return null;
+        const categoryTotal = p.line_items
+          .filter(li => li.category === category && li.is_consumption_based)
+          .reduce((sum, li) => sum + li.amount, 0);
+        if (categoryTotal <= 0) return null;
+        return categoryTotal / p.service_days;
+      })
+      .filter((v): v is number => v !== null);
+
+    const currentDaily = input.currentDays && input.currentDays > 0
+      ? currentAmount / input.currentDays
+      : null;
+
+    if (sample.length < 2) {
+      results.push({
+        category,
+        baseline: null,
+        baselineSampleSize: sample.length,
+        currentValue: currentDaily,
+        variancePct: null,
+        flagged: false,
+        reason: `Only ${sample.length} qualifying prior bill(s) with ${category} line items; baseline requires at least 2.`,
+      });
+      continue;
+    }
+
+    const baseline = sample.reduce((a, b) => a + b, 0) / sample.length;
+
+    if (currentDaily === null) {
+      results.push({
+        category,
+        baseline,
+        baselineSampleSize: sample.length,
+        currentValue: null,
+        variancePct: null,
+        flagged: false,
+        reason: "Current bill missing service_days; cannot normalize.",
+      });
+      continue;
+    }
+
+    const variancePct = ((currentDaily - baseline) / baseline) * 100;
+    results.push({
+      category,
+      baseline,
+      baselineSampleSize: sample.length,
+      currentValue: currentDaily,
+      variancePct,
+      flagged: variancePct > input.thresholdPct,
+    });
+  }
+
+  return results.sort((a, b) => {
+    // Flagged first, then highest variance
+    if (a.flagged !== b.flagged) return a.flagged ? -1 : 1;
+    return (b.variancePct ?? -Infinity) - (a.variancePct ?? -Infinity);
+  });
+}
+
+/** Whether any category in a category-variance result set is flagged. */
+export function hasCategoryFlags(results: CategoryVarianceResult[]): boolean {
+  return results.some(r => r.flagged);
+}
+
+/** Summary text for display: "Water +18.3%, Sewer +4.1%". */
+export function summarizeCategoryVariances(results: CategoryVarianceResult[]): string {
+  const withData = results.filter(r => r.variancePct !== null);
+  if (withData.length === 0) return "No variance data";
+  return withData
+    .map(r => {
+      const pct = r.variancePct!;
+      const sign = pct >= 0 ? "+" : "";
+      const cat = r.category.charAt(0).toUpperCase() + r.category.slice(1);
+      return `${cat} ${sign}${pct.toFixed(2)}%`;
+    })
+    .join(", ");
+}

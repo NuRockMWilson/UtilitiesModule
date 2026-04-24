@@ -66,6 +66,40 @@ export default async function WaterDetailPage({
     status:        r.invoices?.status ?? null,
   }));
 
+  // Line-item breakdown for water invoices at this property. Joined by
+  // invoice_id so we can surface "Jan: Water $6,508 + Sewer $6,780 + ..."
+  // on the same page as the reading-level history.
+  const invoiceIds = allReadings
+    .map(r => r.invoice_id)
+    .filter((id): id is string => !!id);
+
+  const { data: lineItemRows } = invoiceIds.length
+    ? await supabase
+        .from("invoice_line_items")
+        .select("invoice_id, description, category, amount, is_consumption_based, gl_coding")
+        .in("invoice_id", invoiceIds)
+    : { data: [] };
+
+  // Group line items by invoice_id for easy rendering
+  const lineItemsByInvoice = new Map<string, Array<{
+    description: string;
+    category:    string;
+    amount:      number;
+    is_consumption_based: boolean;
+    gl_coding:   string | null;
+  }>>();
+  for (const li of (lineItemRows ?? []) as any[]) {
+    const list = lineItemsByInvoice.get(li.invoice_id) ?? [];
+    list.push({
+      description:          String(li.description),
+      category:             String(li.category ?? "other"),
+      amount:               Number(li.amount),
+      is_consumption_based: Boolean(li.is_consumption_based),
+      gl_coding:            li.gl_coding ?? null,
+    });
+    lineItemsByInvoice.set(li.invoice_id, list);
+  }
+
   // Filter to year, but also surface a 12-month-prior cohort for delta calcs
   const currentYear = allReadings.filter(r =>
     r.service_end && r.service_end.startsWith(String(year)));
@@ -260,6 +294,69 @@ export default async function WaterDetailPage({
             Historical readings (before the app went live) are marked with
             invoice numbers starting <span className="font-mono">HIST-W-</span>.
           </p>
+
+          {/* Line-item breakdown per invoice (Priority 1 deliverable) */}
+          {currentYear.length > 0 && lineItemsByInvoice.size > 0 && (
+            <div className="mt-8">
+              <h2 className="font-display text-lg font-semibold text-navy-800 mb-1">
+                Line-item breakdown
+              </h2>
+              <p className="text-xs text-tan-600 mb-3">
+                Each bill split into its component charges — water, sewer,
+                irrigation, storm water, environmental protection fees, and
+                other line items. Consumption-driven lines (<span className="text-navy-700">●</span>) feed
+                per-category variance; flat fees (<span className="text-tan-400">○</span>) are excluded from variance.
+              </p>
+              <div className="card overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-navy-100 text-tan-700 text-xs uppercase tracking-wide">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium">Service period</th>
+                      <th className="px-3 py-2 text-left font-medium">Line item</th>
+                      <th className="px-3 py-2 text-left font-medium">Category</th>
+                      <th className="px-3 py-2 text-left font-medium">GL</th>
+                      <th className="px-3 py-2 text-right font-medium">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-navy-100">
+                    {currentYear.flatMap(r => {
+                      const items = r.invoice_id ? lineItemsByInvoice.get(r.invoice_id) ?? [] : [];
+                      if (items.length === 0) return [];
+                      return items.map((li, idx) => (
+                        <tr key={`${r.id}-${idx}`} className="hover:bg-paper">
+                          <td className="px-3 py-2 tabular-nums text-xs">
+                            {idx === 0 && r.service_start && r.service_end
+                              ? `${formatDate(r.service_start)} – ${formatDate(r.service_end)}`
+                              : ""}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={li.is_consumption_based ? "text-navy-700" : "text-tan-500"}>
+                              {li.is_consumption_based ? "● " : "○ "}
+                            </span>
+                            {li.description}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-tan-700">
+                            {li.category.replace(/_/g, " ")}
+                          </td>
+                          <td className="px-3 py-2 text-xs font-mono text-tan-700">
+                            {li.gl_coding ?? "—"}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            {formatDollars(li.amount)}
+                          </td>
+                        </tr>
+                      ));
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-tan-600 mt-2">
+                Historical line items (marked with HIST- invoice numbers) come from the
+                per-property Water sheet. Line items sum should equal the month's total
+                within $0.02; mismatches are flagged on the invoice detail page.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

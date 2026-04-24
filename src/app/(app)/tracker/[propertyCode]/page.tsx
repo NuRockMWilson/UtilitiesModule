@@ -97,6 +97,12 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
             Water detail
           </Link>
           <Link
+            href={`/tracker/${property.code}/meters?year=${year}`}
+            className="btn-secondary text-sm"
+          >
+            House meters
+          </Link>
+          <Link
             href={`/tracker/${property.code}/fixed?year=${year}`}
             className="btn-secondary text-sm opacity-50 cursor-not-allowed pointer-events-none"
             aria-disabled="true"

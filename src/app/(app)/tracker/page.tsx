@@ -20,7 +20,7 @@ export default async function TrackerIndexPage() {
 
   return (
     <>
-      <TopBar title="Property trackers" subtitle="Summary, water, fixed expenses per property" />
+      <TopBar title="Property trackers" subtitle="Summary, water, house meters, fixed expenses" />
       <div className="p-8 space-y-8">
         {Array.from(byState.entries()).map(([state, props]) => (
           <section key={state}>

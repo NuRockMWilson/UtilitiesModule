@@ -40,6 +40,11 @@ except ImportError:
     print("openpyxl required: pip install openpyxl", file=sys.stderr)
     sys.exit(1)
 
+# Import the sibling water-detail parser
+sys.path.insert(0, str(Path(__file__).parent))
+from _water_detail_parser import parse_water_detail   # noqa: E402
+from _house_meters_parser import parse_house_meters    # noqa: E402
+
 # -----------------------------------------------------------------------------
 # Reference data
 # -----------------------------------------------------------------------------
@@ -418,11 +423,15 @@ def match_property_from_filename(filename: str) -> str | None:
 def emit_sql(
     summary_rows: list[tuple[str, dict]],
     water_history: dict[str, list[dict]],
+    water_details: dict[str, dict],
+    house_meters: dict[str, dict],
     output_path: Path,
 ):
     """
     summary_rows:  list of (property_code, row_dict)
     water_history: { property_code: [ record_dict, ... ] }
+    water_details: { property_code: { vendor_name, account_number, line_items } }
+    house_meters:  { property_code: { vendor_name, meters: [...] } }
     """
     out = []
     out.append("-- ============================================================================")
@@ -574,6 +583,210 @@ from invs i
 where wr.usage is not null;""")
         out.append("")
 
+    # -------------------------------------------------------------------------
+    # Water-detail line items
+    # -------------------------------------------------------------------------
+    # For each property that had a Water sheet parsed, create invoice_line_items
+    # rows linked to the monthly HIST-S-<code>-5120-Water-<year>-<mm> invoices
+    # that the Summary block created above. Each month typically gets 3-5 lines
+    # (water, sewer, irrigation, storm water, envir protection).
+    #
+    # This runs AFTER the summary block since it needs the invoices to exist.
+
+    if water_details:
+        total_line_items = sum(len(d["line_items"]) for d in water_details.values())
+        out.append(f"-- {total_line_items:,} water-detail line items across {len(water_details)} properties")
+        out.append("-- Linked to the HIST-S-<code>-<gl>-Water-<year>-<mm> invoice rows created above.")
+        out.append("")
+
+        out.append("with li(property_code, year, month, description, amount, category, gl_code, is_consumption_based) as (values")
+        lines = []
+        for pc in sorted(water_details.keys()):
+            for item in water_details[pc]["line_items"]:
+                lines.append(
+                    f"  ({sql_str(pc)}, {item['year']}, {item['month']}, "
+                    f"{sql_str(item['description'])}, {item['amount']}, "
+                    f"{sql_str(item['category'])}, {sql_str(item['gl_code'])}, "
+                    f"{'true' if item['is_consumption_based'] else 'false'})"
+                )
+        out.append(",\n".join(lines))
+        out.append(")")
+        # Match each line-item back to its parent summary invoice by property/gl/month
+        out.append("""insert into invoice_line_items
+  (invoice_id, gl_account_id, sub_code, gl_coding,
+   description, category, amount, is_consumption_based, source_row_label)
+select
+  i.id, g.id, '00',
+  '500-' || p.code || '-' || g.code || '.00',
+  li.description, li.category, li.amount, li.is_consumption_based,
+  li.description
+from li
+  join properties p   on p.code = li.property_code
+  join gl_accounts g  on g.code = li.gl_code
+  join invoices i     on i.property_id = p.id
+                     and i.source_reference = 'historical_import_summary'
+                     and extract(year  from i.invoice_date)::int = li.year
+                     and extract(month from i.invoice_date)::int = li.month
+                     -- Match to the primary water summary row for that month
+                     and (i.invoice_number like 'HIST-S-' || p.code || '-5120-Water-%'
+                       or i.invoice_number like 'HIST-S-' || p.code || '-5120-Storm%'
+                       or i.invoice_number like 'HIST-S-' || p.code || '-5120-Envir%'
+                       or i.invoice_number like 'HIST-S-' || p.code || '-5120-Cluhouse%'
+                       or i.invoice_number like 'HIST-S-' || p.code || '-5120-Water')
+                     and i.gl_account_id = (select id from gl_accounts where code = '5120')
+on conflict do nothing;""")
+        out.append("")
+
+        # Reconciliation: mark invoices where sum of line items equals total
+        out.append("-- Reconciliation flag — true where line-items sum to invoice total")
+        out.append("""update invoices i
+set line_items_reconciled = case
+  when li_totals.line_items_total is null then null
+  when abs(coalesce(li_totals.line_items_total, 0) - i.total_amount_due) < 0.02 then true
+  else false
+end
+from v_invoice_line_totals li_totals
+where li_totals.invoice_id = i.id
+  and i.source_reference = 'historical_import_summary';""")
+        out.append("")
+
+    # -------------------------------------------------------------------------
+    # House Meters — per-meter utility accounts + monthly invoices
+    # -------------------------------------------------------------------------
+    # For each property's House Meters sheet:
+    #   1. Register the electric vendor
+    #   2. Create one utility_accounts row per meter (with meter_id/esi_id/
+    #      meter_category populated)
+    #   3. Create one HIST-M-<code>-<meter>-<yyyymm> invoice per meter per
+    #      month with data
+
+    if house_meters:
+        total_meters = sum(len(d["meters"]) for d in house_meters.values())
+        out.append(f"-- {total_meters} historical house meters across {len(house_meters)} properties")
+        out.append("")
+
+        # Register each electric vendor encountered
+        vendors_seen = set()
+        for pc, data in sorted(house_meters.items()):
+            v = data.get("vendor_name")
+            if v and v not in vendors_seen:
+                vendors_seen.add(v)
+        if vendors_seen:
+            out.append("-- Electric vendors discovered in historical House Meters data")
+            for v in sorted(vendors_seen):
+                out.append(f"insert into vendors (name, category) values ({sql_str(v)}, 'electric')")
+                out.append("on conflict do nothing;")
+            out.append("")
+
+        # Upsert utility_accounts rows — one per (property × meter)
+        out.append("-- One utility_accounts row per physical meter")
+        out.append("with meters_src(property_code, vendor_name, account_number, meter_id, esi_id,")
+        out.append("                 description, category, gl_code) as (values")
+        meter_rows = []
+        for pc in sorted(house_meters.keys()):
+            data = house_meters[pc]
+            vendor = data.get("vendor_name") or "Electric utility (historical)"
+            for m in data["meters"]:
+                # Account number fallback — use meter_id or synthetic if both null
+                acct = m.get("account_number") or m.get("meter_id") or m.get("esi_id")
+                if not acct:
+                    acct = f"HIST-M-{pc}-{abs(hash(m['description'])) % 100000}"
+                meter_rows.append(
+                    f"  ({sql_str(pc)}, {sql_str(vendor)}, {sql_str(acct)}, "
+                    f"{sql_str(m.get('meter_id'))}, {sql_str(m.get('esi_id'))}, "
+                    f"{sql_str(m.get('description'))}, {sql_str(m.get('category'))}, "
+                    f"{sql_str(m.get('gl_code'))})"
+                )
+        out.append(",\n".join(meter_rows))
+        out.append(")")
+        # First ensure the vendors exist (second insert, idempotent)
+        out.append("""
+, ensure_vendor as (
+  insert into vendors (name, category)
+  select distinct vendor_name, 'electric' from meters_src
+  on conflict (name) do nothing
+  returning id, name
+)
+insert into utility_accounts
+  (property_id, vendor_id, gl_account_id, account_number,
+   meter_id, esi_id, meter_category,
+   description, sub_code,
+   baseline_window_months, variance_threshold_pct, usage_unit, active)
+select
+  p.id, v.id, g.id, m.account_number,
+  m.meter_id, m.esi_id, m.category,
+  coalesce(m.description, 'Meter ' || m.meter_id),
+  '00', 12, 3.00, 'kwh', true
+from meters_src m
+  join properties  p on p.code = m.property_code
+  join vendors     v on v.name = m.vendor_name
+  join gl_accounts g on g.code = m.gl_code
+on conflict (vendor_id, account_number) do update
+  set meter_id        = excluded.meter_id,
+      esi_id          = excluded.esi_id,
+      meter_category  = excluded.meter_category,
+      description     = excluded.description;""")
+        out.append("")
+
+        # Emit historical invoices — one per meter × month
+        out.append("-- Historical monthly invoices per meter (status='paid')")
+        out.append("with meter_months(property_code, account_number, year, month, amount) as (values")
+        mm_rows = []
+        for pc in sorted(house_meters.keys()):
+            data = house_meters[pc]
+            year = data.get("year", date.today().year)
+            for m in data["meters"]:
+                acct = m.get("account_number") or m.get("meter_id") or m.get("esi_id")
+                if not acct:
+                    acct = f"HIST-M-{pc}-{abs(hash(m['description'])) % 100000}"
+                for month, amount in m["monthly_amounts"].items():
+                    mm_rows.append(
+                        f"  ({sql_str(pc)}, {sql_str(acct)}, {year}, {month}, {amount})"
+                    )
+        if mm_rows:
+            out.append(",\n".join(mm_rows))
+            out.append(")")
+            out.append("""insert into invoices
+  (property_id, vendor_id, utility_account_id, gl_account_id,
+   invoice_number, invoice_date, due_date,
+   service_period_start, service_period_end, service_days,
+   current_charges, total_amount_due, status, source, source_reference,
+   sage_posted_at, gl_coding, extraction_confidence, requires_human_review)
+select
+  p.id, ua.vendor_id, ua.id, g.id,
+  'HIST-M-' || mm.property_code || '-' || regexp_replace(mm.account_number, '[^A-Za-z0-9]', '', 'g')
+    || '-' || mm.year || lpad(mm.month::text, 2, '0'),
+  make_date(mm.year, mm.month, 1),
+  make_date(mm.year, mm.month, 28),
+  make_date(mm.year, mm.month, 1),
+  (date_trunc('month', make_date(mm.year, mm.month, 1)) + interval '1 month - 1 day')::date,
+  extract(day from (date_trunc('month', make_date(mm.year, mm.month, 1))
+                    + interval '1 month - 1 day'))::int,
+  mm.amount, mm.amount, 'paid', 'manual',
+  'historical_import_meter',
+  make_date(mm.year, mm.month, 1),
+  '500-' || p.code || '-' || ua.gl_account_id::text || '.00',
+  1.00, false
+from meter_months mm
+  join properties p on p.code = mm.property_code
+  join utility_accounts ua
+    on ua.property_id = p.id and ua.account_number = mm.account_number
+  join gl_accounts g on g.id = ua.gl_account_id
+on conflict do nothing;""")
+            out.append("")
+
+        # Clean up the Summary-sheet "House Electric" rows that are superseded
+        # by the per-meter detail above
+        out.append("-- Remove Summary-sheet House Electric rows superseded by per-meter detail")
+        out.append("""delete from invoices
+  where source_reference = 'historical_import_summary'
+    and gl_account_id in (select id from gl_accounts where code in ('5112', '5114', '5116'))
+    and property_id in (
+      select distinct property_id from invoices
+      where source_reference = 'historical_import_meter'
+    );""")
+        out.append("")
+
     out.append("-- End of historical import")
     output_path.write_text("\n".join(out))
 
@@ -607,6 +820,8 @@ def main():
 
     summary_rows  = []    # [(property_code, row_dict)]
     water_history = {}    # {property_code: [record_dict]}
+    water_details = {}    # {property_code: {vendor_name, account_number, line_items}}
+    house_meters  = {}    # {property_code: {vendor_name, meters: [...]}}
 
     for path in files:
         name = path.name
@@ -633,6 +848,26 @@ def main():
             for r in rows:
                 summary_rows.append((pc, r))
             print(f"  ✓ Summary: {len(rows)} monthly rows")
+
+            # Also parse Water sheet for line-item detail
+            detail = parse_water_detail(wb, pc, date.today().year)
+            if detail and detail.get("line_items"):
+                water_details[pc] = detail
+                months_with_data = set(li["month"] for li in detail["line_items"])
+                print(f"    + Water detail: {len(detail['line_items'])} line items "
+                      f"across {len(months_with_data)} months "
+                      f"(vendor={detail.get('vendor_name')!r})")
+
+            # And the House Meters sheet for per-meter detail
+            hm = parse_house_meters(wb, pc, date.today().year)
+            if hm and hm.get("meters"):
+                house_meters[pc] = hm
+                total_dollars = sum(
+                    sum(m["monthly_amounts"].values()) for m in hm["meters"]
+                )
+                print(f"    + House meters: {len(hm['meters'])} meters, "
+                      f"${float(total_dollars):,.0f} annual "
+                      f"(vendor={hm.get('vendor_name')!r})")
         elif is_breakdown:
             bp = match_property_from_filename(name)
             if not bp:
@@ -650,10 +885,14 @@ def main():
     print()
     total_summary = len(summary_rows)
     total_water   = sum(len(v) for v in water_history.values())
-    print(f"Summary rows:    {total_summary:,} across {len(set(pc for pc,_ in summary_rows))} properties")
-    print(f"Water readings:  {total_water:,} across {len(water_history)} properties")
+    total_lines   = sum(len(d["line_items"]) for d in water_details.values())
+    total_meters  = sum(len(d["meters"]) for d in house_meters.values())
+    print(f"Summary rows:         {total_summary:,} across {len(set(pc for pc,_ in summary_rows))} properties")
+    print(f"Water readings:       {total_water:,} across {len(water_history)} properties")
+    print(f"Water line items:     {total_lines:,} across {len(water_details)} properties")
+    print(f"House meters:         {total_meters:,} across {len(house_meters)} properties")
 
-    emit_sql(summary_rows, water_history, output)
+    emit_sql(summary_rows, water_history, water_details, house_meters, output)
     print(f"\nWrote {output} ({output.stat().st_size:,} bytes)")
 
 if __name__ == "__main__":
