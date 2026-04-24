@@ -70,18 +70,18 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
       <div className="p-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: PDF viewer */}
         <div className="space-y-4">
-          <div className="card p-0 overflow-hidden aspect-[8.5/11] bg-navy-50">
+          <div className="card p-0 overflow-hidden aspect-[8.5/11] bg-[#FAFBFC]">
             {pdfUrl ? (
               <iframe src={pdfUrl} className="w-full h-full" title="Bill PDF" />
             ) : (
-              <div className="flex items-center justify-center h-full text-tan-700 text-sm">
+              <div className="flex items-center justify-center h-full text-nurock-slate text-sm">
                 No PDF attached to this invoice.
               </div>
             )}
           </div>
           {invoice.extraction_warnings && invoice.extraction_warnings.length > 0 && (
             <div className="card p-4 border-l-4 border-l-flag-yellow">
-              <div className="text-xs uppercase tracking-wide text-tan-700 mb-2">
+              <div className="text-xs uppercase tracking-wide text-nurock-slate mb-2">
                 Extraction warnings
               </div>
               <ul className="list-disc list-inside text-sm text-ink space-y-1">
@@ -89,7 +89,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
                   <li key={i}>{w}</li>
                 ))}
               </ul>
-              <div className="text-xs text-tan-700 mt-3">
+              <div className="text-xs text-nurock-slate mt-3">
                 Confidence: {formatPercent((invoice.extraction_confidence ?? 0) * 100, { decimals: 0 })}
               </div>
             </div>
@@ -100,7 +100,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
         <div className="space-y-6">
           <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-display text-base font-semibold text-navy-800">Bill details</h3>
+              <h3 className="font-display text-base font-semibold text-nurock-black">Bill details</h3>
               <StatusPill status={invoice.status as InvoiceStatus} />
             </div>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
@@ -125,10 +125,10 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
 
           {usageReadings && usageReadings.length > 0 && (
             <div className="card p-5">
-              <h3 className="font-display text-base font-semibold text-navy-800 mb-3">Usage readings</h3>
+              <h3 className="font-display text-base font-semibold text-nurock-black mb-3">Usage readings</h3>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-tan-700">
+                  <tr className="text-left text-xs uppercase tracking-wide text-nurock-slate">
                     <th className="font-medium pb-2">Type</th>
                     <th className="font-medium pb-2 text-right">Usage</th>
                     <th className="font-medium pb-2 text-right">Days</th>
@@ -136,7 +136,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
                     <th className="font-medium pb-2 text-right">vs Baseline</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-navy-50">
+                <tbody className="divide-y divide-nurock-border">
                   {usageReadings.map((u: any) => (
                     <tr key={u.id}>
                       <td className="py-2 capitalize">{u.reading_type}</td>
@@ -148,7 +148,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
                           ? <span className={u.variance_flagged ? "text-flag-red font-medium" : ""}>
                               {formatPercent(u.variance_pct, { sign: true })}
                             </span>
-                          : <span className="text-tan-500">—</span>}
+                          : <span className="text-nurock-slate-light">—</span>}
                       </td>
                     </tr>
                   ))}
@@ -159,25 +159,25 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
 
           <div className="card p-5">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-display text-base font-semibold text-navy-800">Variance analysis</h3>
+              <h3 className="font-display text-base font-semibold text-nurock-black">Variance analysis</h3>
               <VarianceFlag flag={flag} />
             </div>
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>
-                <div className="text-xs uppercase tracking-wide text-tan-700">Threshold</div>
-                <div className="text-navy-800 font-medium mt-1">{formatPercent(Number(threshold))}</div>
+                <div className="text-xs uppercase tracking-wide text-nurock-slate">Threshold</div>
+                <div className="text-nurock-black font-medium mt-1">{formatPercent(Number(threshold))}</div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-wide text-tan-700">Baseline</div>
-                <div className="text-navy-800 font-medium mt-1">
+                <div className="text-xs uppercase tracking-wide text-nurock-slate">Baseline</div>
+                <div className="text-nurock-black font-medium mt-1">
                   {invoice.variance_baseline !== null
                     ? formatNumber(Number(invoice.variance_baseline), 2)
                     : "Insufficient history"}
                 </div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-wide text-tan-700">Variance</div>
-                <div className={`font-medium mt-1 ${invoice.variance_flagged ? "text-flag-red" : "text-navy-800"}`}>
+                <div className="text-xs uppercase tracking-wide text-nurock-slate">Variance</div>
+                <div className={`font-medium mt-1 ${invoice.variance_flagged ? "text-flag-red" : "text-nurock-black"}`}>
                   {invoice.variance_pct !== null
                     ? formatPercent(Number(invoice.variance_pct), { sign: true })
                     : "—"}
@@ -186,7 +186,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
             </div>
 
             {invoice.variance_flagged && (
-              <div className="mt-5 pt-5 border-t border-navy-100">
+              <div className="mt-5 pt-5 border-t border-nurock-border">
                 <VarianceExplanationForm
                   invoiceId={invoice.id}
                   currentExplanation={invoice.variance_explanation}
@@ -207,7 +207,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
 
           {/* Audit trail */}
           <div className="card p-5">
-            <h3 className="font-display text-base font-semibold text-navy-800 mb-3">Audit trail</h3>
+            <h3 className="font-display text-base font-semibold text-nurock-black mb-3">Audit trail</h3>
             <ol className="space-y-2 text-sm">
               {(logEntries ?? []).map((e: any) => (
                 <li key={e.id} className="flex gap-3 items-start">
@@ -216,37 +216,37 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
                     <div className="text-ink">
                       <span className="font-medium">{e.action}</span>
                       {e.new_status && e.new_status !== e.previous_status && (
-                        <span className="text-tan-700"> → {e.new_status}</span>
+                        <span className="text-nurock-slate"> → {e.new_status}</span>
                       )}
                     </div>
-                    <div className="text-xs text-tan-700">
+                    <div className="text-xs text-nurock-slate">
                       {formatDate(e.created_at)} · {e.actor_email ?? "system"}
                     </div>
-                    {e.notes && <div className="text-xs text-tan-800 mt-0.5">{e.notes}</div>}
+                    {e.notes && <div className="text-xs text-nurock-slate mt-0.5">{e.notes}</div>}
                   </div>
                 </li>
               ))}
               {(logEntries ?? []).length === 0 && (
-                <li className="text-tan-700 text-sm">No activity yet.</li>
+                <li className="text-nurock-slate text-sm">No activity yet.</li>
               )}
             </ol>
           </div>
 
           {inquiries && inquiries.length > 0 && (
             <div className="card p-5">
-              <h3 className="font-display text-base font-semibold text-navy-800 mb-3">
+              <h3 className="font-display text-base font-semibold text-nurock-black mb-3">
                 Variance inquiries
               </h3>
               <ul className="space-y-3">
                 {inquiries.map((q: any) => (
                   <li key={q.id} className="border-l-2 border-tan-300 pl-3 text-sm">
-                    <div className="text-xs text-tan-700">
+                    <div className="text-xs text-nurock-slate">
                       To {q.recipient_email} · sent {formatDate(q.sent_at)}
                     </div>
                     <div className="mt-1 text-ink">{q.subject}</div>
                     {q.response_body && (
-                      <div className="mt-2 bg-navy-50 rounded p-2 text-sm">
-                        <div className="text-xs text-tan-700 mb-1">
+                      <div className="mt-2 bg-[#FAFBFC] rounded p-2 text-sm">
+                        <div className="text-xs text-nurock-slate mb-1">
                           Response · {formatDate(q.response_received_at)}
                         </div>
                         {q.response_body}
@@ -261,7 +261,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
       </div>
 
       <div className="px-8 pb-8">
-        <Link href="/invoices" className="text-sm text-navy-600 hover:underline">
+        <Link href="/invoices" className="text-sm text-nurock-navy hover:underline">
           ← Back to invoices
         </Link>
       </div>
@@ -274,8 +274,8 @@ function Field({
 }: { label: string; value: string | null | undefined; mono?: boolean; emphasis?: boolean }) {
   return (
     <div>
-      <dt className="text-xs uppercase tracking-wide text-tan-700">{label}</dt>
-      <dd className={`mt-0.5 ${emphasis ? "font-semibold text-navy-800" : "text-ink"} ${mono ? "font-mono text-sm" : ""}`}>
+      <dt className="text-xs uppercase tracking-wide text-nurock-slate">{label}</dt>
+      <dd className={`mt-0.5 ${emphasis ? "font-semibold text-nurock-black" : "text-ink"} ${mono ? "font-mono text-sm" : ""}`}>
         {value ?? "—"}
       </dd>
     </div>

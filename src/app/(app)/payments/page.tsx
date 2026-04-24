@@ -72,9 +72,9 @@ function SummaryCard({
   const border = tone === "yellow" ? "border-l-flag-yellow" : "border-l-navy";
   return (
     <div className={`card p-4 border-l-4 ${border}`}>
-      <div className="text-xs uppercase tracking-wide text-tan-700">{label}</div>
-      <div className="text-2xl font-semibold text-navy-800 mt-1">{value}</div>
-      {sub && <div className="text-xs text-tan-700 mt-1">{sub}</div>}
+      <div className="text-xs uppercase tracking-wide text-nurock-slate">{label}</div>
+      <div className="text-2xl font-semibold text-nurock-black mt-1">{value}</div>
+      {sub && <div className="text-xs text-nurock-slate mt-1">{sub}</div>}
     </div>
   );
 }

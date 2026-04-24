@@ -44,6 +44,9 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent))
 from _water_detail_parser import parse_water_detail   # noqa: E402
 from _house_meters_parser import parse_house_meters    # noqa: E402
+from _vacant_units_parser import parse_vacant_units    # noqa: E402
+from _garbage_parser      import parse_garbage         # noqa: E402
+from _fixed_categories_parser import parse_fixed_categories  # noqa: E402
 
 # -----------------------------------------------------------------------------
 # Reference data
@@ -425,13 +428,14 @@ def emit_sql(
     water_history: dict[str, list[dict]],
     water_details: dict[str, dict],
     house_meters: dict[str, dict],
+    vacant_units: dict[str, dict],
+    garbage_data: dict[str, dict],
+    fixed_cats: dict[str, dict],
     output_path: Path,
 ):
     """
-    summary_rows:  list of (property_code, row_dict)
-    water_history: { property_code: [ record_dict, ... ] }
-    water_details: { property_code: { vendor_name, account_number, line_items } }
-    house_meters:  { property_code: { vendor_name, meters: [...] } }
+    fixed_cats: { property_code: { categories: { phone: [...], cable: [...],
+                                                   fedex: [...], fixed: [...] } } }
     """
     out = []
     out.append("-- ============================================================================")
@@ -787,6 +791,309 @@ on conflict do nothing;""")
     );""")
         out.append("")
 
+    # -------------------------------------------------------------------------
+    # Vacant Unit Charges — per-unit per-month vacancy costs (GL 5114)
+    # -------------------------------------------------------------------------
+    if vacant_units:
+        total_charges = sum(
+            sum(len(u["monthly_amounts"]) for u in d["units"])
+            for d in vacant_units.values()
+        )
+        total_units = sum(len(d["units"]) for d in vacant_units.values())
+        out.append(f"-- {total_charges} vacant-unit charges across {total_units} units, "
+                   f"{len(vacant_units)} properties")
+        out.append("")
+
+        out.append("with vuc(property_code, unit_number, building_number, meter_id, esi_id,")
+        out.append("         account_number, year, month, amount) as (values")
+        rows_sql = []
+        for pc in sorted(vacant_units.keys()):
+            data = vacant_units[pc]
+            year = data.get("year", date.today().year)
+            for u in data["units"]:
+                for month, amount in u["monthly_amounts"].items():
+                    rows_sql.append(
+                        f"  ({sql_str(pc)}, {sql_str(u['unit_number'])}, "
+                        f"{sql_str(u.get('building_number'))}, "
+                        f"{sql_str(u.get('meter_id'))}, "
+                        f"{sql_str(u.get('esi_id'))}, "
+                        f"{sql_str(u.get('account_number'))}, "
+                        f"{year}, {month}, {amount})"
+                    )
+        out.append(",\n".join(rows_sql))
+        out.append(")")
+        out.append("""insert into vacant_unit_charges
+  (property_id, unit_number, building_number, meter_id, esi_id,
+   account_number, year, month, amount,
+   gl_account_id, gl_coding, source)
+select
+  p.id, vuc.unit_number, vuc.building_number, vuc.meter_id, vuc.esi_id,
+  vuc.account_number, vuc.year, vuc.month, vuc.amount,
+  g.id, '500-' || p.code || '-5114.00', 'historical_import'
+from vuc
+  join properties  p on p.code = vuc.property_code
+  join gl_accounts g on g.code = '5114'
+on conflict (property_id, unit_number, year, month) do update
+  set amount         = excluded.amount,
+      building_number = excluded.building_number,
+      meter_id       = excluded.meter_id,
+      esi_id         = excluded.esi_id,
+      account_number = excluded.account_number;""")
+        out.append("")
+
+        # Remove the Summary-sheet Vacant Unit Electric rows superseded by per-unit
+        out.append("-- Remove Summary-sheet Vacant Electric totals superseded by per-unit detail")
+        out.append("""delete from invoices
+  where source_reference = 'historical_import_summary'
+    and gl_account_id in (select id from gl_accounts where code = '5114')
+    and property_id in (
+      select distinct property_id from vacant_unit_charges
+      where source = 'historical_import'
+    );""")
+        out.append("")
+
+    # -------------------------------------------------------------------------
+    # Garbage / Trash — monthly invoices with pickup counts (GL 5135)
+    # -------------------------------------------------------------------------
+    if garbage_data:
+        total_months = sum(len(d["months"]) for d in garbage_data.values())
+        out.append(f"-- {total_months} trash invoices across {len(garbage_data)} properties")
+        out.append("")
+
+        # Register vendors
+        vendors_seen = set()
+        for pc, data in sorted(garbage_data.items()):
+            v = data.get("vendor_name")
+            if v:
+                vendors_seen.add(v)
+        # Fallback synthetic vendor for properties without a clear name
+        vendors_seen.add("Trash vendor (historical)")
+        out.append("-- Trash vendors discovered in historical Garbage sheets")
+        for v in sorted(vendors_seen):
+            out.append(f"insert into vendors (name, category) values ({sql_str(v)}, 'trash')")
+            out.append("on conflict do nothing;")
+        out.append("")
+
+        # Upsert utility_accounts — one per property
+        out.append("-- Utility accounts for each property's trash service (GL 5135)")
+        out.append("with tsrc(property_code, vendor_name, account_number) as (values")
+        ua_rows = []
+        for pc in sorted(garbage_data.keys()):
+            d = garbage_data[pc]
+            vendor = d.get("vendor_name") or "Trash vendor (historical)"
+            acct = d.get("account_number") or f"HIST-T-{pc}"
+            ua_rows.append(f"  ({sql_str(pc)}, {sql_str(vendor)}, {sql_str(acct)})")
+        out.append(",\n".join(ua_rows))
+        out.append(")")
+        out.append("""insert into utility_accounts
+  (property_id, vendor_id, gl_account_id, account_number,
+   description, sub_code,
+   baseline_window_months, variance_threshold_pct, usage_unit, active)
+select
+  p.id, v.id, g.id, t.account_number,
+  'Trash service', '00', 12, 3.00, 'pickups', true
+from tsrc t
+  join properties  p on p.code = t.property_code
+  join vendors     v on v.name = t.vendor_name
+  join gl_accounts g on g.code = '5135'
+on conflict (vendor_id, account_number) do nothing;""")
+        out.append("")
+
+        # Emit historical invoices per property × month with pickup count
+        out.append("-- Historical trash invoices with pickup counts for variance normalization")
+        out.append("with tr(property_code, account_number, year, month, amount, pickups) as (values")
+        rows_sql = []
+        for pc in sorted(garbage_data.keys()):
+            d = garbage_data[pc]
+            year = d.get("year", date.today().year)
+            acct = d.get("account_number") or f"HIST-T-{pc}"
+            for m in d["months"]:
+                pickups = m.get("pickups")
+                rows_sql.append(
+                    f"  ({sql_str(pc)}, {sql_str(acct)}, {year}, {m['month']}, "
+                    f"{m['amount']}, {pickups if pickups else 'null'})"
+                )
+        out.append(",\n".join(rows_sql))
+        out.append(")")
+        out.append("""insert into invoices
+  (property_id, vendor_id, utility_account_id, gl_account_id,
+   invoice_number, invoice_date, due_date,
+   service_period_start, service_period_end, service_days,
+   current_charges, total_amount_due, status, source, source_reference,
+   sage_posted_at, gl_coding,
+   units_billed, units_billed_label,
+   extraction_confidence, requires_human_review)
+select
+  p.id, ua.vendor_id, ua.id, g.id,
+  'HIST-T-' || tr.property_code || '-' || tr.year || lpad(tr.month::text, 2, '0'),
+  make_date(tr.year, tr.month, 1),
+  make_date(tr.year, tr.month, 28),
+  make_date(tr.year, tr.month, 1),
+  (date_trunc('month', make_date(tr.year, tr.month, 1)) + interval '1 month - 1 day')::date,
+  extract(day from (date_trunc('month', make_date(tr.year, tr.month, 1))
+                    + interval '1 month - 1 day'))::int,
+  tr.amount, tr.amount, 'paid', 'manual',
+  'historical_import_trash',
+  make_date(tr.year, tr.month, 1),
+  '500-' || p.code || '-5135.00',
+  tr.pickups, case when tr.pickups is not null then 'pickups' else null end,
+  1.00, false
+from tr
+  join properties p on p.code = tr.property_code
+  join utility_accounts ua
+    on ua.property_id = p.id and ua.account_number = tr.account_number
+  join gl_accounts g on g.code = '5135'
+on conflict do nothing;""")
+        out.append("")
+
+        # Remove Summary-sheet Trash rows superseded by this detail
+        out.append("-- Remove Summary-sheet Trash rows superseded by per-month trash detail")
+        out.append("""delete from invoices
+  where source_reference = 'historical_import_summary'
+    and gl_account_id in (select id from gl_accounts where code = '5135')
+    and property_id in (
+      select distinct property_id from invoices
+      where source_reference = 'historical_import_trash'
+    );""")
+        out.append("")
+
+    # -------------------------------------------------------------------------
+    # Priority 5 — Phone / Cable / FedEx / FIXED monthly rollups
+    # -------------------------------------------------------------------------
+    # For each property × category (phone=5635, cable=5140, fedex=5620) we
+    # create one synthetic utility_account and emit one monthly invoice with
+    # the summed amount. FIXED rows flow into their own GL per row (attorney,
+    # carpet cleaning, etc.) — same pattern, just keyed by GL code.
+    if fixed_cats:
+        total_rows = sum(
+            len(d["categories"]["phone"]) + len(d["categories"]["cable"]) +
+            len(d["categories"]["fedex"]) + len(d["categories"]["fixed"])
+            for d in fixed_cats.values()
+        )
+        out.append(f"-- Priority 5: {total_rows} historical phone/cable/fedex/fixed rows "
+                   f"across {len(fixed_cats)} properties")
+        out.append("")
+
+        # Register synthetic vendors
+        out.append("insert into vendors (name, category) values")
+        vendor_lines = [
+            "  ('Telephone services (historical)', 'phone')",
+            "  ,('Cable services (historical)',     'cable')",
+            "  ,('FedEx (historical)',              'delivery')",
+            "  ,('Fixed expenses (historical)',     'services')",
+        ]
+        out.append("\n".join(vendor_lines))
+        out.append("on conflict (name) do nothing;")
+        out.append("")
+
+        # Build the rollup as (property_code, gl_code, vendor_name, category_label, year, month, amount)
+        # where category_label distinguishes the synthetic account used.
+        out.append("with p5(property_code, gl_code, vendor_name, category_label, "
+                   "description, year, month, amount) as (values")
+        rows_sql = []
+
+        CATEGORY_META = {
+            "phone": ("5635", "Telephone services (historical)", "phone", "Phone - monthly rollup"),
+            "cable": ("5140", "Cable services (historical)",     "cable", "Cable - monthly rollup"),
+            "fedex": ("5620", "FedEx (historical)",              "fedex", "FedEx - monthly rollup"),
+        }
+
+        for pc in sorted(fixed_cats.keys()):
+            cats = fixed_cats[pc]["categories"]
+            year = fixed_cats[pc].get("year", date.today().year)
+
+            # Phone, Cable, FedEx: one synthetic account per category
+            for cat_key, (gl, vendor, label, desc) in CATEGORY_META.items():
+                for m in cats.get(cat_key, []):
+                    rows_sql.append(
+                        f"  ({sql_str(pc)}, {sql_str(gl)}, {sql_str(vendor)}, "
+                        f"{sql_str(label)}, {sql_str(desc)}, {year}, {m['month']}, {m['amount']})"
+                    )
+
+            # FIXED rows: one synthetic account per (property × GL code)
+            # Group by (gl_code, description) to collapse identical items
+            fixed_by_gl = {}
+            for r in cats.get("fixed", []):
+                key = (r["gl_code"], r["description"])
+                fixed_by_gl.setdefault(key, []).append(r)
+
+            for (gl, desc), rows in fixed_by_gl.items():
+                for r in rows:
+                    rows_sql.append(
+                        f"  ({sql_str(pc)}, {sql_str(gl)}, "
+                        f"{sql_str('Fixed expenses (historical)')}, "
+                        f"{sql_str('fixed-' + gl)}, {sql_str(desc)}, "
+                        f"{year}, {r['month']}, {r['amount']})"
+                    )
+
+        if rows_sql:
+            out.append(",\n".join(rows_sql))
+            out.append(")")
+
+            # Ensure a utility_accounts row exists per (property × category_label × gl)
+            out.append("""
+, ua_ensure as (
+  insert into utility_accounts
+    (property_id, vendor_id, gl_account_id, account_number,
+     description, sub_code,
+     baseline_window_months, variance_threshold_pct, usage_unit, active)
+  select distinct
+    p.id, v.id, g.id,
+    'HIST-' || upper(p5.category_label) || '-' || p.code || '-' || p5.gl_code,
+    p5.description, '00', 12, 3.00, 'dollars', true
+  from p5
+    join properties  p on p.code = p5.property_code
+    join vendors     v on v.name = p5.vendor_name
+    join gl_accounts g on g.code = p5.gl_code
+  on conflict (vendor_id, account_number) do nothing
+  returning id
+)
+insert into invoices
+  (property_id, vendor_id, utility_account_id, gl_account_id,
+   invoice_number, invoice_date, due_date,
+   service_period_start, service_period_end, service_days,
+   current_charges, total_amount_due, status, source, source_reference,
+   sage_posted_at, gl_coding,
+   extraction_confidence, requires_human_review)
+select
+  p.id, ua.vendor_id, ua.id, g.id,
+  'HIST-' || upper(p5.category_label) || '-' || p5.property_code || '-'
+    || p5.gl_code || '-' || p5.year || lpad(p5.month::text, 2, '0'),
+  make_date(p5.year, p5.month, 1),
+  make_date(p5.year, p5.month, 28),
+  make_date(p5.year, p5.month, 1),
+  (date_trunc('month', make_date(p5.year, p5.month, 1)) + interval '1 month - 1 day')::date,
+  extract(day from (date_trunc('month', make_date(p5.year, p5.month, 1))
+                    + interval '1 month - 1 day'))::int,
+  p5.amount, p5.amount, 'paid', 'manual',
+  'historical_import_priority5',
+  make_date(p5.year, p5.month, 1),
+  '500-' || p.code || '-' || p5.gl_code || '.00',
+  1.00, false
+from p5
+  join properties p on p.code = p5.property_code
+  join gl_accounts g on g.code = p5.gl_code
+  join utility_accounts ua
+    on ua.property_id = p.id
+   and ua.gl_account_id = g.id
+   and ua.account_number = 'HIST-' || upper(p5.category_label) || '-' || p.code || '-' || p5.gl_code
+on conflict do nothing;""")
+            out.append("")
+
+        # Clean up Summary-sheet rows superseded by Priority 5 detail
+        out.append("-- Remove Summary-sheet rows superseded by Priority 5 monthly detail")
+        out.append("""delete from invoices
+  where source_reference = 'historical_import_summary'
+    and gl_account_id in (
+      select id from gl_accounts
+      where code in ('5140', '5620', '5635')
+    )
+    and property_id in (
+      select distinct property_id from invoices
+      where source_reference = 'historical_import_priority5'
+    );""")
+        out.append("")
+
     out.append("-- End of historical import")
     output_path.write_text("\n".join(out))
 
@@ -822,6 +1129,9 @@ def main():
     water_history = {}    # {property_code: [record_dict]}
     water_details = {}    # {property_code: {vendor_name, account_number, line_items}}
     house_meters  = {}    # {property_code: {vendor_name, meters: [...]}}
+    vacant_units  = {}    # {property_code: {units: [...]}}
+    garbage_data  = {}    # {property_code: {vendor_name, account_number, months: [...]}}
+    fixed_cats    = {}    # {property_code: {categories: {phone, cable, fedex, fixed}}}
 
     for path in files:
         name = path.name
@@ -868,6 +1178,43 @@ def main():
                 print(f"    + House meters: {len(hm['meters'])} meters, "
                       f"${float(total_dollars):,.0f} annual "
                       f"(vendor={hm.get('vendor_name')!r})")
+
+            # And the Vacant Units sheet for per-unit vacancy charges
+            vu = parse_vacant_units(wb, pc, date.today().year)
+            if vu and vu.get("units"):
+                vacant_units[pc] = vu
+                total_charges = sum(len(u["monthly_amounts"]) for u in vu["units"])
+                total_dollars = sum(
+                    sum(u["monthly_amounts"].values()) for u in vu["units"]
+                )
+                print(f"    + Vacant units: {len(vu['units'])} units, "
+                      f"{total_charges} monthly charges, "
+                      f"${float(total_dollars):,.0f} total")
+
+            # And the Garbage sheet for monthly trash with pickup counts
+            gd = parse_garbage(wb, pc, date.today().year)
+            if gd and gd.get("months"):
+                garbage_data[pc] = gd
+                gb_total = sum(m["amount"] for m in gd["months"])
+                gb_pickups = sum(m.get("pickups") or 0 for m in gd["months"])
+                per_pickup = f" ${float(gb_total/gb_pickups):.0f}/pickup" if gb_pickups else ""
+                print(f"    + Garbage: {len(gd['months'])} months, "
+                      f"${float(gb_total):,.0f}, {gb_pickups} pickups{per_pickup} "
+                      f"(vendor={gd.get('vendor_name')!r})")
+
+            # Priority 5: Phone / Cable / FedEx / FIXED categories
+            fc = parse_fixed_categories(wb, pc, date.today().year)
+            if fc and any(fc["categories"].values()):
+                fixed_cats[pc] = fc
+                cats = fc["categories"]
+                p_amt = sum(m["amount"] for m in cats["phone"])
+                c_amt = sum(m["amount"] for m in cats["cable"])
+                f_amt = sum(m["amount"] for m in cats["fedex"])
+                x_rows = len(cats["fixed"])
+                x_amt = sum(r["amount"] for r in cats["fixed"])
+                print(f"    + Phone/Cable/FedEx/FIXED: "
+                      f"phone=${float(p_amt):,.0f} cable=${float(c_amt):,.0f} "
+                      f"fedex=${float(f_amt):,.0f} fixed={x_rows}rows ${float(x_amt):,.0f}")
         elif is_breakdown:
             bp = match_property_from_filename(name)
             if not bp:
@@ -887,12 +1234,28 @@ def main():
     total_water   = sum(len(v) for v in water_history.values())
     total_lines   = sum(len(d["line_items"]) for d in water_details.values())
     total_meters  = sum(len(d["meters"]) for d in house_meters.values())
+    total_vacant_charges = sum(
+        sum(len(u["monthly_amounts"]) for u in d["units"])
+        for d in vacant_units.values()
+    )
+    total_vacant_units = sum(len(d["units"]) for d in vacant_units.values())
+    total_trash_months = sum(len(d["months"]) for d in garbage_data.values())
+    total_trash_dollars = sum(sum(m["amount"] for m in d["months"]) for d in garbage_data.values())
+    total_phone_mo = sum(len(d["categories"]["phone"]) for d in fixed_cats.values())
+    total_cable_mo = sum(len(d["categories"]["cable"]) for d in fixed_cats.values())
+    total_fedex_mo = sum(len(d["categories"]["fedex"]) for d in fixed_cats.values())
+    total_fixed_rows = sum(len(d["categories"]["fixed"]) for d in fixed_cats.values())
     print(f"Summary rows:         {total_summary:,} across {len(set(pc for pc,_ in summary_rows))} properties")
     print(f"Water readings:       {total_water:,} across {len(water_history)} properties")
     print(f"Water line items:     {total_lines:,} across {len(water_details)} properties")
     print(f"House meters:         {total_meters:,} across {len(house_meters)} properties")
+    print(f"Vacant unit charges:  {total_vacant_charges:,} across {total_vacant_units} units, {len(vacant_units)} properties")
+    print(f"Trash invoices:       {total_trash_months:,} across {len(garbage_data)} properties, ${float(total_trash_dollars):,.0f}")
+    print(f"Phone months:         {total_phone_mo:,}    Cable months: {total_cable_mo:,}")
+    print(f"FedEx months:         {total_fedex_mo:,}    FIXED rows:   {total_fixed_rows:,}")
 
-    emit_sql(summary_rows, water_history, water_details, house_meters, output)
+    emit_sql(summary_rows, water_history, water_details, house_meters,
+             vacant_units, garbage_data, fixed_cats, output)
     print(f"\nWrote {output} ({output.stat().st_size:,} bytes)")
 
 if __name__ == "__main__":

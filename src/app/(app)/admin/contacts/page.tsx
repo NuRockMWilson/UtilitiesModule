@@ -27,11 +27,11 @@ export default async function AdminContactsPage() {
           const hasPrimary = contacts.some((c: any) => c.is_primary_for_variance && c.active);
           return (
             <div key={p.id} className="card">
-              <div className="px-5 py-3 border-b border-navy-100 flex items-center justify-between">
+              <div className="px-5 py-3 border-b border-nurock-border flex items-center justify-between">
                 <div>
-                  <span className="font-mono text-xs text-navy-700">{p.code}</span>
-                  <span className="font-medium text-navy-800 ml-2">{p.name}</span>
-                  <span className="text-xs text-tan-700 ml-2">· {p.state}</span>
+                  <span className="font-mono text-xs text-nurock-navy">{p.code}</span>
+                  <span className="font-medium text-nurock-black ml-2">{p.name}</span>
+                  <span className="text-xs text-nurock-slate ml-2">· {p.state}</span>
                 </div>
                 {!hasPrimary && (
                   <span className="badge bg-red-100 text-red-800">
@@ -40,12 +40,12 @@ export default async function AdminContactsPage() {
                 )}
               </div>
               {contacts.length === 0 ? (
-                <div className="px-5 py-6 text-center text-sm text-tan-700">
+                <div className="px-5 py-6 text-center text-sm text-nurock-slate">
                   No contacts configured. Add via Supabase dashboard for now.
                 </div>
               ) : (
                 <table className="min-w-full text-sm">
-                  <thead className="bg-navy-50/50 text-left text-xs uppercase tracking-wide text-tan-700">
+                  <thead className="bg-[#FAFBFC] text-left text-xs uppercase tracking-wide text-nurock-slate">
                     <tr>
                       <th className="px-4 py-2 font-medium">Name</th>
                       <th className="px-4 py-2 font-medium">Role</th>
@@ -53,21 +53,21 @@ export default async function AdminContactsPage() {
                       <th className="px-4 py-2 font-medium">Variance</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-navy-50">
+                  <tbody className="divide-y divide-nurock-border">
                     {contacts.map((c: any) => (
                       <tr key={c.id}>
                         <td className="px-4 py-2">{c.name}</td>
-                        <td className="px-4 py-2 text-tan-800">{c.role ?? "—"}</td>
+                        <td className="px-4 py-2 text-nurock-slate">{c.role ?? "—"}</td>
                         <td className="px-4 py-2 text-xs">{c.email}</td>
                         <td className="px-4 py-2">
                           {c.is_primary_for_variance && (
-                            <span className="badge bg-navy-100 text-navy-800 mr-1">Primary</span>
+                            <span className="badge badge-navy mr-1">Primary</span>
                           )}
                           {c.cc_on_variance && (
-                            <span className="badge bg-tan-100 text-tan-800">CC</span>
+                            <span className="badge bg-nurock-flag-slate-bg text-nurock-slate">CC</span>
                           )}
                           {!c.is_primary_for_variance && !c.cc_on_variance && (
-                            <span className="text-xs text-tan-500">—</span>
+                            <span className="text-xs text-nurock-slate-light">—</span>
                           )}
                         </td>
                       </tr>

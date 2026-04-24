@@ -52,7 +52,7 @@ export default async function InvoicesPage({ searchParams }: Props) {
     <>
       <TopBar title="Invoices" subtitle={`${rows.length} shown`} />
 
-      <div className="px-8 py-4 border-b border-navy-100 bg-white">
+      <div className="px-8 py-4 border-b border-nurock-border bg-white">
         <div className="flex items-center gap-2 flex-wrap">
           {STATUS_FILTERS.map(f => {
             const active = (searchParams.status ?? "") === f.value;
@@ -66,8 +66,8 @@ export default async function InvoicesPage({ searchParams }: Props) {
                 className={cn(
                   "badge border transition-colors",
                   active
-                    ? "bg-navy text-white border-navy"
-                    : "bg-white text-navy-700 border-navy-200 hover:bg-navy-50",
+                    ? "bg-nurock-navy text-white border-navy"
+                    : "bg-white text-nurock-navy border-nurock-border hover:bg-[#FAFBFC]",
                 )}
               >
                 {f.label}
@@ -80,7 +80,7 @@ export default async function InvoicesPage({ searchParams }: Props) {
               "badge border transition-colors ml-auto",
               searchParams.flagged === "true"
                 ? "bg-flag-yellow text-white border-flag-yellow"
-                : "bg-white text-navy-700 border-navy-200 hover:bg-navy-50",
+                : "bg-white text-nurock-navy border-nurock-border hover:bg-[#FAFBFC]",
             )}
           >
             {searchParams.flagged === "true" ? "Showing flagged only" : "Variance flagged"}
@@ -95,9 +95,9 @@ export default async function InvoicesPage({ searchParams }: Props) {
           </div>
         )}
         <div className="card overflow-hidden">
-          <table className="min-w-full divide-y divide-navy-100 text-sm">
-            <thead className="bg-navy-50">
-              <tr className="text-left text-xs uppercase tracking-wide text-tan-700">
+          <table className="min-w-full divide-y divide-nurock-border text-sm">
+            <thead className="bg-[#FAFBFC]">
+              <tr className="text-left text-xs uppercase tracking-wide text-nurock-slate">
                 <th className="px-4 py-3 font-medium">Property</th>
                 <th className="px-4 py-3 font-medium">Vendor</th>
                 <th className="px-4 py-3 font-medium">Invoice</th>
@@ -109,21 +109,21 @@ export default async function InvoicesPage({ searchParams }: Props) {
                 <th className="px-4 py-3 font-medium text-right">Due</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-navy-50">
+            <tbody className="divide-y divide-nurock-border">
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-tan-700">
+                  <td colSpan={9} className="px-4 py-10 text-center text-nurock-slate">
                     No invoices match the current filter.
                   </td>
                 </tr>
               )}
               {rows.map((r: any) => (
-                <tr key={r.id} className="hover:bg-navy-50/50">
+                <tr key={r.id} className="hover:bg-[#FAFBFC]">
                   <td className="px-4 py-3">
-                    <Link href={`/invoices/${r.id}`} className="font-medium text-navy-800 hover:underline">
+                    <Link href={`/invoices/${r.id}`} className="font-medium text-nurock-black hover:underline">
                       {r.property?.code ?? "—"}
                     </Link>
-                    <div className="text-xs text-tan-700 truncate max-w-[160px]">
+                    <div className="text-xs text-nurock-slate truncate max-w-[160px]">
                       {r.property?.name ?? ""}
                     </div>
                   </td>
@@ -138,15 +138,15 @@ export default async function InvoicesPage({ searchParams }: Props) {
                   <td className="px-4 py-3 text-right tabular-nums">
                     {r.variance_pct !== null ? (
                       <span className={cn(
-                        r.variance_flagged ? "text-flag-red font-medium" : "text-tan-700",
+                        r.variance_flagged ? "text-flag-red font-medium" : "text-nurock-slate",
                       )}>
                         {formatPercent(r.variance_pct, { sign: true })}
                       </span>
                     ) : (
-                      <span className="text-tan-500">—</span>
+                      <span className="text-nurock-slate-light">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-tan-700">{r.gl_coding ?? "—"}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-nurock-slate">{r.gl_coding ?? "—"}</td>
                   <td className="px-4 py-3"><StatusPill status={r.status as InvoiceStatus} /></td>
                   <td className="px-4 py-3 text-right text-xs">{formatDate(r.due_date)}</td>
                 </tr>

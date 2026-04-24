@@ -31,7 +31,7 @@ export default async function VarianceInquiriesPage() {
       />
       <div className="p-8 space-y-4">
         {rows.length === 0 && (
-          <div className="card p-10 text-center text-tan-700">
+          <div className="card p-10 text-center text-nurock-slate">
             No variance inquiries have been sent yet.
           </div>
         )}
@@ -42,30 +42,30 @@ export default async function VarianceInquiriesPage() {
                 <div className="flex items-center gap-2 mb-1">
                   <Link
                     href={`/invoices/${q.invoice?.id}`}
-                    className="font-medium text-navy-800 hover:underline"
+                    className="font-medium text-nurock-black hover:underline"
                   >
                     {q.invoice?.property?.code} · {q.invoice?.property?.name}
                   </Link>
-                  <span className="text-xs text-tan-700">· {q.invoice?.vendor?.name}</span>
+                  <span className="text-xs text-nurock-slate">· {q.invoice?.vendor?.name}</span>
                 </div>
                 <div className="text-sm text-ink">{q.subject}</div>
-                <div className="text-xs text-tan-700 mt-1">
+                <div className="text-xs text-nurock-slate mt-1">
                   To {q.recipient_email} · sent {formatDate(q.sent_at)}
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <div className="text-xs text-tan-700 uppercase tracking-wide">Variance</div>
+                <div className="text-xs text-nurock-slate uppercase tracking-wide">Variance</div>
                 <div className="text-lg font-semibold text-flag-red">
                   {formatPercent(Number(q.invoice?.variance_pct ?? 0), { sign: true })}
                 </div>
-                <div className="text-xs text-tan-700">
+                <div className="text-xs text-nurock-slate">
                   {formatDollars(Number(q.invoice?.total_amount_due ?? 0))}
                 </div>
               </div>
             </div>
             {q.response_body ? (
               <div className="mt-3 pl-3 border-l-2 border-green-300 text-sm bg-green-50/40 rounded-r p-3">
-                <div className="text-xs text-tan-700 mb-1">
+                <div className="text-xs text-nurock-slate mb-1">
                   Response · {formatDate(q.response_received_at)}
                 </div>
                 {q.response_body}
@@ -82,7 +82,7 @@ export default async function VarianceInquiriesPage() {
                 </span>
                 <Link
                   href={`/invoices/${q.invoice?.id}`}
-                  className="text-xs text-navy-600 hover:underline"
+                  className="text-xs text-nurock-navy hover:underline"
                 >
                   View bill →
                 </Link>

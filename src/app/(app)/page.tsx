@@ -64,18 +64,18 @@ export default async function DashboardPage() {
   return (
     <>
       <TopBar title="Dashboard" subtitle="Utility AP workflow at a glance" />
-      <div className="p-8 space-y-8">
+      <div className="p-8 space-y-6 max-w-[1600px] mx-auto w-full">
 
         <section>
-          <h2 className="text-sm font-medium uppercase tracking-wide text-tan-700 mb-3">
+          <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.08em] text-nurock-slate mb-3">
             Attention
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <AttentionCard
               label="Variance flagged"
               value={formatNumber(flagged)}
               href="/invoices?flagged=true"
-              tone="yellow"
+              tone="amber"
               note="Bills above baseline threshold awaiting explanation"
             />
             <AttentionCard
@@ -97,10 +97,10 @@ export default async function DashboardPage() {
 
         <section>
           <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-sm font-medium uppercase tracking-wide text-tan-700">
+            <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.08em] text-nurock-slate">
               Workflow stages
             </h2>
-            <Link href="/invoices" className="text-sm text-navy-600 hover:underline">
+            <Link href="/invoices" className="text-[12.5px] text-nurock-navy hover:underline font-medium">
               View all invoices →
             </Link>
           </div>
@@ -111,15 +111,15 @@ export default async function DashboardPage() {
                 <Link
                   key={status}
                   href={`/invoices?status=${status}`}
-                  className="card p-4 hover:border-navy-300 transition-colors"
+                  className="kpi-tile hover:shadow-card-h transition-shadow"
                 >
-                  <div className="text-xs uppercase tracking-wide text-tan-700 truncate">
+                  <div className="kpi-label truncate">
                     {status.replace(/_/g, " ")}
                   </div>
-                  <div className="text-2xl font-semibold text-navy-800 mt-1">
+                  <div className="kpi-value num">
                     {formatNumber(c?.count ?? 0)}
                   </div>
-                  <div className="text-xs text-tan-700 mt-0.5">
+                  <div className="kpi-sub num">
                     {formatDollars(c?.amount ?? 0, { cents: false })}
                   </div>
                 </Link>
@@ -129,7 +129,7 @@ export default async function DashboardPage() {
         </section>
 
         <section>
-          <h2 className="text-sm font-medium uppercase tracking-wide text-tan-700 mb-3">
+          <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.08em] text-nurock-slate mb-3">
             Quick actions
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -148,33 +148,30 @@ function AttentionCard({
   label, value, sub, note, href, tone,
 }: {
   label: string; value: string; sub?: string; note?: string;
-  href: string; tone: "yellow" | "red" | "navy";
+  href: string; tone: "amber" | "red" | "navy";
 }) {
-  const toneClasses = tone === "yellow"
-    ? "border-l-flag-yellow"
-    : tone === "red"
-    ? "border-l-flag-red"
-    : "border-l-navy";
   return (
     <Link
       href={href}
-      className={cn("card p-5 border-l-4 hover:border-l-navy-700 block transition-colors", toneClasses)}
+      className={cn("kpi-tile block hover:shadow-card-h transition-shadow", tone)}
     >
-      <div className="text-xs uppercase tracking-wide text-tan-700">{label}</div>
-      <div className="flex items-baseline gap-3 mt-2">
-        <div className="text-3xl font-semibold text-navy-800">{value}</div>
-        {sub && <div className="text-sm text-tan-700">{sub}</div>}
+      <div className="kpi-label">{label}</div>
+      <div className="flex items-baseline gap-3 mt-1">
+        <div className="kpi-value text-[28px] num">{value}</div>
+        {sub && <div className="text-[12.5px] text-nurock-slate num">{sub}</div>}
       </div>
-      {note && <div className="text-xs text-tan-700 mt-2">{note}</div>}
+      {note && <div className="kpi-sub mt-2">{note}</div>}
     </Link>
   );
 }
 
 function QuickAction({ href, label, note }: { href: string; label: string; note: string }) {
   return (
-    <Link href={href} className="card p-4 hover:border-navy-300 transition-colors block">
-      <div className="font-medium text-navy-800">{label}</div>
-      <div className="text-xs text-tan-700 mt-1">{note}</div>
+    <Link href={href} className="card hover:shadow-card-h transition-shadow block">
+      <div className="card-b">
+        <div className="font-medium text-nurock-black text-[13px]">{label}</div>
+        <div className="text-[11px] text-nurock-slate-light mt-1">{note}</div>
+      </div>
     </Link>
   );
 }

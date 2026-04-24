@@ -144,23 +144,23 @@ export default async function MetersDetailPage({
         subtitle={`${property.full_code} · ${meters.length} meters · ${year} YTD ${formatDollars(propertyYtdTotal)}`}
       />
 
-      <div className="px-8 py-4 bg-white border-b border-navy-100 flex items-center justify-between">
+      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary text-sm">
+          <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
             ← Summary
           </Link>
-          <Link href={`/tracker/${property.code}/water?year=${year}`} className="btn-secondary text-sm">
+          <Link href={`/tracker/${property.code}/water?year=${year}`} className="btn-secondary">
             Water detail
           </Link>
           <div className="flex items-center gap-1 ml-4">
-            <span className="text-xs text-tan-700 mr-2">Year:</span>
+            <span className="text-xs text-nurock-slate mr-2">Year:</span>
             {years.map(y => (
               <Link
                 key={y}
                 href={`/tracker/${property.code}/meters?year=${y}`}
                 className={
                   "px-2 py-1 rounded text-xs " +
-                  (y === year ? "bg-navy text-white" : "text-navy-700 hover:bg-tan-100")
+                  (y === year ? "bg-nurock-navy text-white" : "text-nurock-navy hover:bg-nurock-flag-navy-bg")
                 }
               >
                 {y}
@@ -170,12 +170,12 @@ export default async function MetersDetailPage({
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-paper">
+      <div className="flex-1 overflow-auto bg-nurock-bg">
         <div className="px-8 py-6">
           {meters.length === 0 && (
             <div className="card p-8 text-center">
-              <div className="text-navy-700 font-medium mb-2">No electric meters on file</div>
-              <div className="text-sm text-tan-700">
+              <div className="text-nurock-navy font-medium mb-2">No electric meters on file</div>
+              <div className="text-sm text-nurock-slate">
                 This property has no electric meters set up yet. Meters are created
                 automatically from the historical import or as bills flow through
                 the extraction pipeline. You can also add them manually under
@@ -187,19 +187,19 @@ export default async function MetersDetailPage({
           {meters.length > 0 && (
             <>
               {/* Category breakdown */}
-              <div className="grid grid-cols-4 gap-4 mb-6">
+              <div className="grid grid-cols-4 gap-3 mb-6">
                 {Array.from(categoryTotals.entries())
                   .sort((a, b) => b[1] - a[1])
                   .slice(0, 4)
                   .map(([cat, total]) => (
-                    <div key={cat} className="card p-4">
-                      <div className="text-xs text-tan-700 uppercase tracking-wide">
+                    <div key={cat} className="kpi-tile navy">
+                      <div className="kpi-label">
                         {categoryLabels[cat] || cat}
                       </div>
-                      <div className="text-xl font-display font-semibold text-navy-800 mt-1">
+                      <div className="kpi-value num">
                         {formatDollars(total)}
                       </div>
-                      <div className="text-xs text-tan-600 mt-1">
+                      <div className="kpi-sub num">
                         {propertyYtdTotal > 0
                           ? formatPercent(total / propertyYtdTotal)
                           : "—"} of total
@@ -211,59 +211,59 @@ export default async function MetersDetailPage({
               {/* Per-meter monthly grid */}
               <div className="card overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-navy-100 text-tan-700 text-xs uppercase tracking-wide">
+                  <thead className="bg-[#FAFBFC] text-nurock-slate text-[10px] uppercase tracking-[0.08em] font-display font-semibold">
                     <tr>
-                      <th className="px-3 py-2 text-left font-medium sticky left-0 bg-navy-100 z-10">
+                      <th className="cell-head sticky left-0 z-10">
                         Meter
                       </th>
-                      <th className="px-3 py-2 text-left font-medium">Category</th>
-                      <th className="px-3 py-2 text-left font-medium">Account</th>
+                      <th className="cell-head">Category</th>
+                      <th className="cell-head">Account</th>
                       {MONTHS.map(m => (
-                        <th key={m} className="px-2 py-2 text-right font-medium">
+                        <th key={m} className="cell-head text-right">
                           {m}
                         </th>
                       ))}
-                      <th className="px-3 py-2 text-right font-medium bg-navy-200">
+                      <th className="px-3 py-2 text-right font-medium bg-nurock-flag-navy-bg">
                         YTD
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-navy-100">
+                  <tbody className="divide-y divide-nurock-border">
                     {meters.map((m: any) => {
                       const row = ytdByMeter[m.id];
                       const cat = m.meter_category || "other";
                       const meterLabel = m.description || m.meter_id || m.account_number || "Unnamed meter";
                       return (
-                        <tr key={m.id} className="hover:bg-paper">
-                          <td className="px-3 py-2 sticky left-0 bg-white z-10">
+                        <tr key={m.id} className="hover:bg-nurock-bg">
+                          <td className="cell sticky left-0 bg-white z-10">
                             {meterLabel}
                             {m.meter_id && m.description !== m.meter_id && (
-                              <div className="text-xs text-tan-600 font-mono">
+                              <div className="text-xs text-nurock-slate-light font-mono">
                                 {m.meter_id}
                               </div>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-xs text-tan-700">
+                          <td className="px-3 py-2 text-xs text-nurock-slate">
                             {categoryLabels[cat] || cat}
                           </td>
-                          <td className="px-3 py-2 text-xs font-mono text-tan-700">
+                          <td className="px-3 py-2 text-xs font-mono text-nurock-slate">
                             {m.account_number}
                           </td>
                           {(row?.monthly ?? new Array(12).fill(null)).map((v, i) => (
-                            <td key={i} className="px-2 py-2 text-right tabular-nums">
-                              {v !== null ? formatDollars(v) : <span className="text-tan-400">—</span>}
+                            <td key={i} className="cell text-right num">
+                              {v !== null ? formatDollars(v) : <span className="text-nurock-slate-light">—</span>}
                             </td>
                           ))}
-                          <td className="px-3 py-2 text-right tabular-nums font-medium bg-navy-50">
-                            {row?.ytd ? formatDollars(row.ytd) : <span className="text-tan-400">—</span>}
+                          <td className="px-3 py-2 text-right tabular-nums font-medium bg-[#FAFBFC]">
+                            {row?.ytd ? formatDollars(row.ytd) : <span className="text-nurock-slate-light">—</span>}
                           </td>
                         </tr>
                       );
                     })}
                   </tbody>
-                  <tfoot className="bg-navy-200 font-medium">
+                  <tfoot className="bg-nurock-flag-navy-bg font-medium">
                     <tr>
-                      <td className="px-3 py-2 sticky left-0 bg-navy-200 z-10">
+                      <td className="px-3 py-2 sticky left-0 bg-nurock-flag-navy-bg z-10">
                         Total — {meters.length} meters
                       </td>
                       <td></td>
@@ -272,12 +272,12 @@ export default async function MetersDetailPage({
                         const monthTotal = meters.reduce((s: number, m: any) =>
                           s + (ytdByMeter[m.id]?.monthly[i] ?? 0), 0);
                         return (
-                          <td key={i} className="px-2 py-2 text-right tabular-nums">
+                          <td key={i} className="cell text-right num">
                             {monthTotal > 0 ? formatDollars(monthTotal) : ""}
                           </td>
                         );
                       })}
-                      <td className="px-3 py-2 text-right tabular-nums">
+                      <td className="cell text-right num">
                         {formatDollars(propertyYtdTotal)}
                       </td>
                     </tr>
@@ -285,7 +285,7 @@ export default async function MetersDetailPage({
                 </table>
               </div>
 
-              <p className="text-xs text-tan-600 mt-4">
+              <p className="text-xs text-nurock-slate-light mt-4">
                 Meters are grouped by category for fast visual comparison. Variance analysis
                 runs per-meter — anomalies on the pool pump or clubhouse meter surface
                 directly instead of being hidden in the property total. Historical meter

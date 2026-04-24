@@ -79,92 +79,114 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
         subtitle={`${property.state}${property.unit_count ? ` · ${property.unit_count} units` : ""} · Sage: ${property.sage_system === "sage_intacct" ? "Intacct" : "300 CRE"}`}
       />
 
-      <div className="px-8 py-4 bg-white border-b border-navy-100 flex items-center justify-between">
+      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <YearPicker currentYear={year} propertyCode={property.code} />
         </div>
         <div className="flex items-center gap-2">
           <Link
             href={`/api/tracker/${property.code}/export?year=${year}`}
-            className="btn-secondary text-sm"
+            className="btn-secondary"
           >
             Export to Excel
           </Link>
-          <Link
-            href={`/tracker/${property.code}/water?year=${year}`}
-            className="btn-secondary text-sm"
-          >
-            Water detail
-          </Link>
-          <Link
-            href={`/tracker/${property.code}/meters?year=${year}`}
-            className="btn-secondary text-sm"
-          >
-            House meters
-          </Link>
-          <Link
-            href={`/tracker/${property.code}/fixed?year=${year}`}
-            className="btn-secondary text-sm opacity-50 cursor-not-allowed pointer-events-none"
-            aria-disabled="true"
-            title="Fixed expenses detail page — coming in Phase 2"
-          >
-            Fixed expenses <span className="text-xs text-tan-600">(soon)</span>
-          </Link>
+          <span className="text-[11px] text-nurock-slate-light ml-2">
+            Click any row name to drill into its detail →
+          </span>
         </div>
       </div>
 
       <div className="p-8">
         <div className="card overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="min-w-full">
             <thead>
-              <tr className="bg-navy text-white text-xs uppercase tracking-wide">
-                <th className="px-3 py-2 text-left font-medium">GL</th>
-                <th className="px-3 py-2 text-left font-medium">Description</th>
+              <tr>
+                <th className="cell-head">GL</th>
+                <th className="cell-head">Description</th>
                 {MONTHS.map(m => (
-                  <th key={m} className="px-2 py-2 text-right font-medium">{m}</th>
+                  <th key={m} className="cell-head text-right">{m}</th>
                 ))}
-                <th className="px-3 py-2 text-right font-medium bg-navy-700">YTD</th>
-                <th className="px-3 py-2 text-right font-medium bg-navy-700">Budget</th>
-                <th className="px-3 py-2 text-right font-medium bg-navy-700">Var %</th>
+                <th className="cell-head text-right">YTD</th>
+                <th className="cell-head text-right">Budget</th>
+                <th className="cell-head text-right">Var %</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-navy-50">
-              {rows.map(r => (
-                <tr key={r.gl.id} className="hover:bg-navy-50/50">
-                  <td className="px-3 py-2 font-mono text-xs text-navy-700">{r.gl.code}</td>
-                  <td className="px-3 py-2">{r.gl.description}</td>
-                  {r.monthly.map((v, i) => (
-                    <td key={i} className="px-2 py-2 text-right tabular-nums text-xs">
-                      {v > 0 ? formatDollars(v) : <span className="text-tan-400">–</span>}
+            <tbody>
+              {rows.map(r => {
+                // Determine which detail page (if any) this GL drills into.
+                const detailHref =
+                  ["5120", "5122", "5125"].includes(r.gl.code) ? `/tracker/${property.code}/water?year=${year}`   :
+                  ["5112", "5116"].includes(r.gl.code)          ? `/tracker/${property.code}/meters?year=${year}`  :
+                  r.gl.code === "5114"                           ? `/tracker/${property.code}/vacant?year=${year}`  :
+                  r.gl.code === "5135"                           ? `/tracker/${property.code}/trash?year=${year}`   :
+                  ["5140", "5635"].includes(r.gl.code)          ? `/tracker/${property.code}/comms?year=${year}`   :
+                  null;
+
+                return (
+                  <tr key={r.gl.id} className="table-row border-b border-nurock-border last:border-b-0">
+                    <td className="cell">
+                      <span className="code">{r.gl.code}</span>
                     </td>
-                  ))}
-                  <td className="px-3 py-2 text-right tabular-nums font-medium bg-navy-50">
-                    {formatDollars(r.ytd)}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums bg-navy-50">
-                    {r.budget > 0 ? formatDollars(r.budget) : <span className="text-tan-400">–</span>}
-                  </td>
-                  <td className={cn(
-                    "px-3 py-2 text-right tabular-nums text-xs bg-navy-50",
-                    r.variance !== null && r.variance > 5 ? "text-flag-red font-medium" : "text-tan-700",
-                  )}>
-                    {r.variance !== null ? formatPercent(r.variance, { sign: true }) : "—"}
-                  </td>
-                </tr>
-              ))}
-              <tr className="bg-navy-100 font-medium">
-                <td />
-                <td className="px-3 py-2">Total utilities</td>
+                    <td className="cell">
+                      {detailHref ? (
+                        <Link
+                          href={detailHref}
+                          className="text-nurock-navy hover:text-nurock-navy-light hover:underline inline-flex items-center gap-1 group font-medium"
+                          title={`View ${r.gl.description} detail`}
+                        >
+                          {r.gl.description}
+                          <svg
+                            viewBox="0 0 20 20"
+                            className="w-3.5 h-3.5 text-nurock-tan group-hover:text-nurock-navy"
+                            fill="currentColor"
+                            aria-hidden
+                          >
+                            <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                          </svg>
+                        </Link>
+                      ) : (
+                        <span className="text-nurock-black">{r.gl.description}</span>
+                      )}
+                    </td>
+                    {r.monthly.map((v, i) => (
+                      <td key={i} className="cell text-right num text-nurock-slate">
+                        {v > 0 ? formatDollars(v) : <span className="text-nurock-slate-light">–</span>}
+                      </td>
+                    ))}
+                    <td className="cell text-right num font-semibold text-nurock-black bg-[#FAFBFC]">
+                      {formatDollars(r.ytd)}
+                    </td>
+                    <td className="cell text-right num text-nurock-slate bg-[#FAFBFC]">
+                      {r.budget > 0 ? formatDollars(r.budget) : <span className="text-nurock-slate-light">–</span>}
+                    </td>
+                    <td className={cn(
+                      "cell text-right num bg-[#FAFBFC]",
+                      r.variance !== null && r.variance > 5 ? "text-flag-red font-semibold" : "text-nurock-slate",
+                    )}>
+                      {r.variance !== null ? formatPercent(r.variance, { sign: true }) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+              <tr className="bg-[#FAFBFC] border-t-2 border-nurock-border">
+                <td className="cell" />
+                <td className="cell font-display font-semibold uppercase tracking-wide text-nurock-navy text-[12px]">
+                  Total utilities
+                </td>
                 {totals.monthly.map((v, i) => (
-                  <td key={i} className="px-2 py-2 text-right tabular-nums text-xs">
-                    {v > 0 ? formatDollars(v) : "–"}
+                  <td key={i} className="cell text-right num font-semibold text-nurock-black">
+                    {v > 0 ? formatDollars(v) : <span className="text-nurock-slate-light">–</span>}
                   </td>
                 ))}
-                <td className="px-3 py-2 text-right tabular-nums bg-navy-200">{formatDollars(totals.ytd)}</td>
-                <td className="px-3 py-2 text-right tabular-nums bg-navy-200">{formatDollars(totals.budget)}</td>
+                <td className="cell text-right num font-bold text-nurock-black bg-nurock-flag-navy-bg">
+                  {formatDollars(totals.ytd)}
+                </td>
+                <td className="cell text-right num font-semibold text-nurock-slate bg-nurock-flag-navy-bg">
+                  {formatDollars(totals.budget)}
+                </td>
                 <td className={cn(
-                  "px-3 py-2 text-right tabular-nums bg-navy-200",
-                  totalVariance !== null && totalVariance > 5 ? "text-flag-red" : "",
+                  "cell text-right num font-semibold bg-nurock-flag-navy-bg",
+                  totalVariance !== null && totalVariance > 5 ? "text-flag-red" : "text-nurock-navy",
                 )}>
                   {totalVariance !== null ? formatPercent(totalVariance, { sign: true }) : "—"}
                 </td>
@@ -172,7 +194,7 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
             </tbody>
           </table>
         </div>
-        <p className="text-xs text-tan-700 mt-3">
+        <p className="text-[11px] text-nurock-slate-light mt-3">
           Amounts reflect approved, posted, and paid invoices. Pending and rejected invoices are excluded.
           Per-unit and occupancy-adjusted views are available on the Water detail page.
         </p>
@@ -186,17 +208,17 @@ function YearPicker({ currentYear, propertyCode }: { currentYear: number; proper
   const years = [thisYear, thisYear - 1, thisYear - 2, thisYear - 3];
   return (
     <div className="flex items-center gap-2">
-      <span className="text-sm text-tan-700">Year:</span>
+      <span className="font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-nurock-slate">Year</span>
       <div className="flex gap-1">
         {years.map(y => (
           <Link
             key={y}
             href={`/tracker/${propertyCode}?year=${y}`}
             className={cn(
-              "badge border",
+              "px-2 py-1 rounded-md text-[11px] font-medium transition-colors",
               y === currentYear
-                ? "bg-navy text-white border-navy"
-                : "bg-white text-navy-700 border-navy-200 hover:bg-navy-50",
+                ? "bg-nurock-navy text-white"
+                : "text-nurock-slate hover:bg-nurock-flag-navy-bg hover:text-nurock-navy",
             )}
           >
             {y}

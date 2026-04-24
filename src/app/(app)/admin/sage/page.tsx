@@ -45,35 +45,35 @@ export default async function AdminSagePage() {
         </div>
 
         <div className="card overflow-hidden">
-          <div className="px-5 py-3 border-b border-navy-100">
-            <h3 className="font-display font-semibold text-navy-800">Per-property assignment</h3>
-            <p className="text-xs text-tan-700 mt-1">
+          <div className="px-5 py-3 border-b border-nurock-border">
+            <h3 className="font-display font-semibold text-nurock-black">Per-property assignment</h3>
+            <p className="text-xs text-nurock-slate mt-1">
               During the migration you can cut over one property at a time. The adapter is chosen
               at post time based on the property's `sage_system` column.
             </p>
           </div>
           <table className="min-w-full text-sm">
-            <thead className="bg-navy-50 text-left text-xs uppercase tracking-wide text-tan-700">
+            <thead className="bg-[#FAFBFC] text-left text-xs uppercase tracking-wide text-nurock-slate">
               <tr>
                 <th className="px-4 py-3 font-medium">Property</th>
                 <th className="px-4 py-3 font-medium">State</th>
                 <th className="px-4 py-3 font-medium">Sage system</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-navy-50">
+            <tbody className="divide-y divide-nurock-border">
               {(properties ?? []).map((p: any) => (
                 <tr key={p.id}>
                   <td className="px-4 py-3">
-                    <span className="font-mono text-xs text-navy-700">{p.code}</span>
-                    <span className="ml-2 font-medium text-navy-800">{p.name}</span>
+                    <span className="font-mono text-xs text-nurock-navy">{p.code}</span>
+                    <span className="ml-2 font-medium text-nurock-black">{p.name}</span>
                   </td>
                   <td className="px-4 py-3">{p.state}</td>
                   <td className="px-4 py-3">
                     <span className={cn(
                       "badge",
                       p.sage_system === "sage_intacct"
-                        ? "bg-green-100 text-green-800"
-                        : "bg-tan-100 text-tan-800",
+                        ? "badge-green"
+                        : "bg-nurock-flag-slate-bg text-nurock-slate",
                     )}>
                       {p.sage_system === "sage_intacct" ? "Intacct" : "300 CRE"}
                     </span>
@@ -102,21 +102,21 @@ function AdapterCard({
     )}>
       <div className="flex items-start justify-between mb-2">
         <div>
-          <h3 className="font-display font-semibold text-navy-800">{name}</h3>
-          <div className="text-xs text-tan-700">{mode}</div>
+          <h3 className="font-display font-semibold text-nurock-black">{name}</h3>
+          <div className="text-xs text-nurock-slate">{mode}</div>
         </div>
         <span className={cn(
           "badge",
-          health.ok ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800",
+          health.ok ? "badge-green" : "bg-yellow-100 text-yellow-800",
         )}>
           {health.ok ? "Ready" : "Not ready"}
         </span>
       </div>
       <div className="text-sm text-ink mt-3">
         <div><strong>{count}</strong> properties assigned</div>
-        <div className="text-xs text-tan-700 mt-1">{health.detail}</div>
+        <div className="text-xs text-nurock-slate mt-1">{health.detail}</div>
       </div>
-      <p className="text-xs text-tan-800 mt-3">{note}</p>
+      <p className="text-xs text-nurock-slate mt-3">{note}</p>
     </div>
   );
 }

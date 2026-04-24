@@ -75,23 +75,23 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-paper px-4">
+    <div className="min-h-screen flex items-center justify-center bg-nurock-bg px-4">
       <div className="card p-8 w-full max-w-md">
         <div className="flex items-center gap-3 mb-6">
-          <NurockLogo color="#164576" />
+          <NurockLogo variant="onLight" size={40} />
           <div className="leading-tight">
-            <div className="font-display text-lg font-semibold text-navy-800">NuRock</div>
-            <div className="text-xs text-tan-700">Utilities AP</div>
+            <div className="font-display text-lg font-semibold text-nurock-black">NuRock</div>
+            <div className="text-xs text-nurock-slate-light">Utilities AP</div>
           </div>
         </div>
 
-        <h1 className="text-2xl font-display font-semibold text-navy-800 mb-2">
+        <h1 className="text-2xl font-display font-semibold text-nurock-black mb-2">
           Sign in
         </h1>
 
         {stage === "email" && (
           <>
-            <p className="text-sm text-tan-700 mb-6">
+            <p className="text-sm text-nurock-slate-light mb-6">
               Enter your NuRock email to receive a 6-digit sign-in code.
             </p>
             <form onSubmit={sendCode} className="space-y-4">
@@ -118,7 +118,7 @@ export default function LoginPage() {
 
         {stage === "code" && (
           <>
-            <p className="text-sm text-tan-700 mb-6">
+            <p className="text-sm text-nurock-slate-light mb-6">
               We sent a 6-digit code to <strong>{email}</strong>. Enter it below.
             </p>
             <form onSubmit={verifyCode} className="space-y-4">
@@ -147,7 +147,7 @@ export default function LoginPage() {
               >
                 {loading ? "Verifying…" : "Sign in"}
               </button>
-              <div className="flex items-center justify-between text-xs text-tan-700">
+              <div className="flex items-center justify-between text-xs text-nurock-slate-light">
                 <button
                   type="button"
                   onClick={() => { setStage("email"); setCode(""); setErr(null); }}

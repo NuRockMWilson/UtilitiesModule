@@ -143,13 +143,13 @@ export default async function WaterDetailPage({
         subtitle={`${property.full_code} · ${currentYear.length} readings in ${year} · ${allReadings.length} total on file`}
       />
 
-      <div className="px-8 py-4 bg-white border-b border-navy-100 flex items-center justify-between">
+      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary text-sm">
+          <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
             ← Summary
           </Link>
           <div className="flex items-center gap-1 ml-4">
-            <span className="text-xs text-tan-700 mr-2">Year:</span>
+            <span className="text-xs text-nurock-slate mr-2">Year:</span>
             {years.map(y => (
               <Link
                 key={y}
@@ -157,8 +157,8 @@ export default async function WaterDetailPage({
                 className={
                   "px-2 py-1 rounded text-xs " +
                   (y === year
-                    ? "bg-navy text-white"
-                    : "text-navy-700 hover:bg-tan-100")
+                    ? "bg-nurock-navy text-white"
+                    : "text-nurock-navy hover:bg-nurock-flag-navy-bg")
                 }
               >
                 {y}
@@ -168,7 +168,7 @@ export default async function WaterDetailPage({
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-paper">
+      <div className="flex-1 overflow-auto bg-nurock-bg">
         <div className="px-8 py-6">
           {/* Year summary cards */}
           <div className="grid grid-cols-4 gap-4 mb-6">
@@ -184,8 +184,8 @@ export default async function WaterDetailPage({
 
           {currentYear.length === 0 && allReadings.length === 0 && (
             <div className="card p-8 text-center">
-              <div className="text-navy-700 font-medium mb-2">No water readings on file</div>
-              <div className="text-sm text-tan-700">
+              <div className="text-nurock-navy font-medium mb-2">No water readings on file</div>
+              <div className="text-sm text-nurock-slate">
                 This property has no water usage history yet. Readings will appear here
                 as water bills flow through the extraction pipeline.
               </div>
@@ -193,12 +193,12 @@ export default async function WaterDetailPage({
           )}
 
           {currentYear.length === 0 && allReadings.length > 0 && (
-            <div className="card p-6 text-center text-sm text-tan-700 mb-4">
+            <div className="card p-6 text-center text-sm text-nurock-slate mb-4">
               No readings in {year}. Historical data available —
               pick a different year above, or view{" "}
               <Link
                 href={`/tracker/${property.code}/water?year=${allReadings[0]?.service_end?.substring(0, 4) ?? year}`}
-                className="text-navy-700 underline">
+                className="text-nurock-navy underline">
                 most recent readings
               </Link>.
             </div>
@@ -207,78 +207,78 @@ export default async function WaterDetailPage({
           {currentYear.length > 0 && (
             <div className="card overflow-hidden">
               <table className="w-full text-sm">
-                <thead className="bg-navy-100 text-tan-700 text-xs uppercase tracking-wide">
+                <thead className="bg-[#FAFBFC] text-nurock-slate text-[10px] uppercase tracking-[0.08em] font-display font-semibold">
                   <tr>
-                    <th className="px-3 py-2 text-left font-medium">Service period</th>
-                    <th className="px-3 py-2 text-right font-medium">Days</th>
-                    <th className="px-3 py-2 text-right font-medium">Usage ({unit})</th>
-                    <th className="px-3 py-2 text-right font-medium">Daily usage</th>
-                    <th className="px-3 py-2 text-right font-medium">Δ vs prior</th>
-                    <th className="px-3 py-2 text-right font-medium">Occupancy</th>
-                    <th className="px-3 py-2 text-right font-medium">Amount</th>
-                    <th className="px-3 py-2 text-left font-medium">Invoice</th>
+                    <th className="cell-head">Service period</th>
+                    <th className="cell-head text-right">Days</th>
+                    <th className="cell-head text-right">Usage ({unit})</th>
+                    <th className="cell-head text-right">Daily usage</th>
+                    <th className="cell-head text-right">Δ vs prior</th>
+                    <th className="cell-head text-right">Occupancy</th>
+                    <th className="cell-head text-right">Amount</th>
+                    <th className="cell-head">Invoice</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-navy-100">
+                <tbody className="divide-y divide-nurock-border">
                   {currentYear.map(r => {
                     const daily = r.days && r.usage ? r.usage / r.days : null;
                     const delta = deltas.get(r.id);
                     return (
-                      <tr key={r.id} className="hover:bg-paper">
-                        <td className="px-3 py-2 tabular-nums">
+                      <tr key={r.id} className="hover:bg-nurock-bg">
+                        <td className="cell num">
                           {r.service_start && r.service_end
                             ? `${formatDate(r.service_start)} – ${formatDate(r.service_end)}`
                             : r.service_end ?? "—"}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">{r.days ?? "—"}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="cell text-right num">{r.days ?? "—"}</td>
+                        <td className="cell text-right num">
                           {r.usage !== null ? formatNumber(r.usage, 2) : "—"}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="cell text-right num">
                           {daily !== null ? formatNumber(daily, 2) : "—"}
                         </td>
                         <td className={
                           "px-3 py-2 text-right tabular-nums " +
                           (delta !== null && delta !== undefined
                             ? (delta > 0.03  ? "text-flag-red font-medium"  :
-                               delta < -0.03 ? "text-flag-green"            : "text-tan-700")
-                            : "text-tan-400")
+                               delta < -0.03 ? "text-flag-green"            : "text-nurock-slate")
+                            : "text-nurock-slate-light")
                         }>
                           {delta !== null && delta !== undefined
                             ? formatPercent(delta, { sign: true })
                             : "—"}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="cell text-right num">
                           {r.occupancy !== null ? formatPercent(r.occupancy) : "—"}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="cell text-right num">
                           {r.amount !== null ? formatDollars(r.amount) : "—"}
                         </td>
-                        <td className="px-3 py-2 text-xs">
+                        <td className="cell">
                           {r.invoice_id ? (
                             <Link
                               href={`/invoices/${r.invoice_id}`}
-                              className="text-navy-700 hover:underline font-mono"
+                              className="text-nurock-navy hover:underline font-mono"
                             >
                               {r.invoice_num}
                             </Link>
-                          ) : <span className="text-tan-400">—</span>}
+                          ) : <span className="text-nurock-slate-light">—</span>}
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
-                <tfoot className="bg-navy-200 font-medium">
+                <tfoot className="bg-nurock-flag-navy-bg font-medium">
                   <tr>
-                    <td className="px-3 py-2">{year} total</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{totalDays}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{formatNumber(totalUsage)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{formatNumber(avgDaily, 2)}</td>
+                    <td className="cell">{year} total</td>
+                    <td className="cell text-right num">{totalDays}</td>
+                    <td className="cell text-right num">{formatNumber(totalUsage)}</td>
+                    <td className="cell text-right num">{formatNumber(avgDaily, 2)}</td>
                     <td></td>
-                    <td className="px-3 py-2 text-right tabular-nums">
+                    <td className="cell text-right num">
                       {avgOcc > 0 ? formatPercent(avgOcc) : "—"}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
+                    <td className="cell text-right num">
                       {totalAmount > 0 ? formatDollars(totalAmount) : "—"}
                     </td>
                     <td></td>
@@ -288,7 +288,7 @@ export default async function WaterDetailPage({
             </div>
           )}
 
-          <p className="text-xs text-tan-600 mt-4">
+          <p className="text-xs text-nurock-slate-light mt-4">
             Variance threshold shown in red/green is the default 3% —
             configurable per utility account under Admin → Utility Accounts.
             Historical readings (before the app went live) are marked with
@@ -298,50 +298,50 @@ export default async function WaterDetailPage({
           {/* Line-item breakdown per invoice (Priority 1 deliverable) */}
           {currentYear.length > 0 && lineItemsByInvoice.size > 0 && (
             <div className="mt-8">
-              <h2 className="font-display text-lg font-semibold text-navy-800 mb-1">
+              <h2 className="font-display text-lg font-semibold text-nurock-black mb-1">
                 Line-item breakdown
               </h2>
-              <p className="text-xs text-tan-600 mb-3">
+              <p className="text-xs text-nurock-slate-light mb-3">
                 Each bill split into its component charges — water, sewer,
                 irrigation, storm water, environmental protection fees, and
-                other line items. Consumption-driven lines (<span className="text-navy-700">●</span>) feed
-                per-category variance; flat fees (<span className="text-tan-400">○</span>) are excluded from variance.
+                other line items. Consumption-driven lines (<span className="text-nurock-navy">●</span>) feed
+                per-category variance; flat fees (<span className="text-nurock-slate-light">○</span>) are excluded from variance.
               </p>
               <div className="card overflow-hidden">
                 <table className="w-full text-sm">
-                  <thead className="bg-navy-100 text-tan-700 text-xs uppercase tracking-wide">
+                  <thead className="bg-[#FAFBFC] text-nurock-slate text-[10px] uppercase tracking-[0.08em] font-display font-semibold">
                     <tr>
-                      <th className="px-3 py-2 text-left font-medium">Service period</th>
-                      <th className="px-3 py-2 text-left font-medium">Line item</th>
-                      <th className="px-3 py-2 text-left font-medium">Category</th>
-                      <th className="px-3 py-2 text-left font-medium">GL</th>
-                      <th className="px-3 py-2 text-right font-medium">Amount</th>
+                      <th className="cell-head">Service period</th>
+                      <th className="cell-head">Line item</th>
+                      <th className="cell-head">Category</th>
+                      <th className="cell-head">GL</th>
+                      <th className="cell-head text-right">Amount</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-navy-100">
+                  <tbody className="divide-y divide-nurock-border">
                     {currentYear.flatMap(r => {
                       const items = r.invoice_id ? lineItemsByInvoice.get(r.invoice_id) ?? [] : [];
                       if (items.length === 0) return [];
                       return items.map((li, idx) => (
-                        <tr key={`${r.id}-${idx}`} className="hover:bg-paper">
-                          <td className="px-3 py-2 tabular-nums text-xs">
+                        <tr key={`${r.id}-${idx}`} className="hover:bg-nurock-bg">
+                          <td className="cell num">
                             {idx === 0 && r.service_start && r.service_end
                               ? `${formatDate(r.service_start)} – ${formatDate(r.service_end)}`
                               : ""}
                           </td>
-                          <td className="px-3 py-2">
-                            <span className={li.is_consumption_based ? "text-navy-700" : "text-tan-500"}>
+                          <td className="cell">
+                            <span className={li.is_consumption_based ? "text-nurock-navy" : "text-nurock-slate-light"}>
                               {li.is_consumption_based ? "● " : "○ "}
                             </span>
                             {li.description}
                           </td>
-                          <td className="px-3 py-2 text-xs text-tan-700">
+                          <td className="px-3 py-2 text-xs text-nurock-slate">
                             {li.category.replace(/_/g, " ")}
                           </td>
-                          <td className="px-3 py-2 text-xs font-mono text-tan-700">
+                          <td className="px-3 py-2 text-xs font-mono text-nurock-slate">
                             {li.gl_coding ?? "—"}
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums">
+                          <td className="cell text-right num">
                             {formatDollars(li.amount)}
                           </td>
                         </tr>
@@ -350,7 +350,7 @@ export default async function WaterDetailPage({
                   </tbody>
                 </table>
               </div>
-              <p className="text-xs text-tan-600 mt-2">
+              <p className="text-xs text-nurock-slate-light mt-2">
                 Historical line items (marked with HIST- invoice numbers) come from the
                 per-property Water sheet. Line items sum should equal the month's total
                 within $0.02; mismatches are flagged on the invoice detail page.
@@ -365,11 +365,9 @@ export default async function WaterDetailPage({
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="card p-4">
-      <div className="text-xs text-tan-700 uppercase tracking-wide">{label}</div>
-      <div className="text-xl font-display font-semibold text-navy-800 mt-1">
-        {value}
-      </div>
+    <div className="kpi-tile navy">
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value num">{value}</div>
     </div>
   );
 }

@@ -32,7 +32,7 @@ export default function UploadPage() {
         <div
           className={cn(
             "border-2 border-dashed rounded-lg p-10 text-center transition-colors",
-            dragOver ? "border-navy bg-navy-50" : "border-navy-200 bg-white",
+            dragOver ? "border-navy bg-[#FAFBFC]" : "border-nurock-border bg-white",
           )}
           onDragOver={e => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
@@ -42,8 +42,8 @@ export default function UploadPage() {
             upload(e.dataTransfer.files);
           }}
         >
-          <div className="text-navy-800 font-medium">Drop PDF bills here</div>
-          <div className="text-sm text-tan-700 mt-1">or</div>
+          <div className="text-nurock-black font-medium">Drop PDF bills here</div>
+          <div className="text-sm text-nurock-slate mt-1">or</div>
           <button
             disabled={uploading}
             onClick={() => inputRef.current?.click()}
@@ -59,7 +59,7 @@ export default function UploadPage() {
             hidden
             onChange={e => e.target.files && upload(e.target.files)}
           />
-          <div className="text-xs text-tan-700 mt-4">
+          <div className="text-xs text-nurock-slate mt-4">
             Bills run through Claude extraction automatically. You'll see each one
             under <strong>Invoices</strong> within a few seconds — no action
             needed from you unless the bill needs coding or was flagged above the
@@ -69,13 +69,13 @@ export default function UploadPage() {
 
         {results.length > 0 && (
           <div className="card mt-6 p-5">
-            <h3 className="font-display font-semibold text-navy-800 mb-3">Queued</h3>
+            <h3 className="font-display font-semibold text-nurock-black mb-3">Queued</h3>
             <ul className="space-y-2 text-sm">
               {results.map((r, i) => (
                 <li key={i} className="flex items-center justify-between">
                   <span className="text-ink">{r.name}</span>
                   {r.invoice_id ? (
-                    <a href={`/invoices/${r.invoice_id}`} className="text-navy-600 text-xs hover:underline">
+                    <a href={`/invoices/${r.invoice_id}`} className="text-nurock-navy text-xs hover:underline">
                       View invoice →
                     </a>
                   ) : (

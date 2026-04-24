@@ -16,7 +16,7 @@ export default async function AdminVendorsPage() {
       <TopBar title="Vendors" subtitle="Utility and service providers NuRock pays" />
       <div className="p-8">
         <div className="mb-4 flex items-center justify-between">
-          <p className="text-sm text-tan-700">
+          <p className="text-sm text-nurock-slate">
             {vendors.length} vendors · Sage vendor IDs must be set before a property can post bills to Sage.
           </p>
           <button disabled className="btn-primary opacity-60" title="Coming in next phase">
@@ -24,8 +24,8 @@ export default async function AdminVendorsPage() {
           </button>
         </div>
         <div className="card overflow-hidden">
-          <table className="min-w-full text-sm divide-y divide-navy-100">
-            <thead className="bg-navy-50 text-left text-xs uppercase tracking-wide text-tan-700">
+          <table className="min-w-full text-sm divide-y divide-nurock-border">
+            <thead className="bg-[#FAFBFC] text-left text-xs uppercase tracking-wide text-nurock-slate">
               <tr>
                 <th className="px-4 py-3 font-medium">Name</th>
                 <th className="px-4 py-3 font-medium">Category</th>
@@ -34,22 +34,22 @@ export default async function AdminVendorsPage() {
                 <th className="px-4 py-3 font-medium">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-navy-50">
+            <tbody className="divide-y divide-nurock-border">
               {vendors.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-10 text-center text-tan-700">
+                <tr><td colSpan={5} className="px-4 py-10 text-center text-nurock-slate">
                   No vendors yet. Add them via the Supabase dashboard for now, or wait for the admin UI.
                 </td></tr>
               )}
               {vendors.map((v: any) => (
                 <tr key={v.id}>
-                  <td className="px-4 py-3 font-medium text-navy-800">{v.name}</td>
+                  <td className="px-4 py-3 font-medium text-nurock-black">{v.name}</td>
                   <td className="px-4 py-3 capitalize">{v.category?.replace(/_/g, " ") ?? "—"}</td>
                   <td className="px-4 py-3 font-mono text-xs">
                     {v.sage_vendor_id ?? <span className="text-flag-red">not set</span>}
                   </td>
-                  <td className="px-4 py-3 text-xs text-tan-800">{v.contact_email ?? "—"}</td>
+                  <td className="px-4 py-3 text-xs text-nurock-slate">{v.contact_email ?? "—"}</td>
                   <td className="px-4 py-3">
-                    <span className={cn("badge", v.active ? "bg-green-100 text-green-800" : "bg-tan-100 text-tan-800")}>
+                    <span className={cn("badge", v.active ? "badge-green" : "bg-nurock-flag-slate-bg text-nurock-slate")}>
                       {v.active ? "Active" : "Inactive"}
                     </span>
                   </td>

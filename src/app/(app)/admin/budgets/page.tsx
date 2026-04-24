@@ -33,7 +33,7 @@ export default async function AdminBudgetsPage({
       />
       <div className="p-8">
         <div className="mb-4 flex items-center justify-between">
-          <p className="text-sm text-tan-700">
+          <p className="text-sm text-nurock-slate">
             Budgets power the Variance % column on property trackers. Enter monthly values via Supabase (bulk import supported) or upload a CSV — upload UI coming next phase.
           </p>
           <div className="flex gap-2">
@@ -41,7 +41,7 @@ export default async function AdminBudgetsPage({
               <Link
                 key={y}
                 href={`/admin/budgets?year=${y}`}
-                className={`badge border ${y === year ? "bg-navy text-white border-navy" : "bg-white text-navy-700 border-navy-200"}`}
+                className={`badge border ${y === year ? "bg-nurock-navy text-white border-navy" : "bg-white text-nurock-navy border-nurock-border"}`}
               >
                 {y}
               </Link>
@@ -49,8 +49,8 @@ export default async function AdminBudgetsPage({
           </div>
         </div>
         <div className="card overflow-hidden">
-          <table className="min-w-full text-sm divide-y divide-navy-100">
-            <thead className="bg-navy-50 text-left text-xs uppercase tracking-wide text-tan-700">
+          <table className="min-w-full text-sm divide-y divide-nurock-border">
+            <thead className="bg-[#FAFBFC] text-left text-xs uppercase tracking-wide text-nurock-slate">
               <tr>
                 <th className="px-4 py-3 font-medium">Property</th>
                 <th className="px-4 py-3 font-medium">State</th>
@@ -58,22 +58,22 @@ export default async function AdminBudgetsPage({
                 <th className="px-4 py-3 font-medium">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-navy-50">
+            <tbody className="divide-y divide-nurock-border">
               {(properties ?? []).map((p: any) => {
                 const total = byProperty.get(p.id) ?? 0;
                 return (
                   <tr key={p.id}>
                     <td className="px-4 py-3">
-                      <span className="font-mono text-xs text-navy-700">{p.code}</span>
-                      <span className="ml-2 font-medium text-navy-800">{p.name}</span>
+                      <span className="font-mono text-xs text-nurock-navy">{p.code}</span>
+                      <span className="ml-2 font-medium text-nurock-black">{p.name}</span>
                     </td>
                     <td className="px-4 py-3">{p.state}</td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {total > 0 ? formatDollars(total) : <span className="text-tan-500">Not set</span>}
+                      {total > 0 ? formatDollars(total) : <span className="text-nurock-slate-light">Not set</span>}
                     </td>
                     <td className="px-4 py-3">
                       {total > 0 ? (
-                        <span className="badge bg-green-100 text-green-800">Loaded</span>
+                        <span className="badge badge-green">Loaded</span>
                       ) : (
                         <span className="badge bg-yellow-100 text-yellow-800">Missing</span>
                       )}

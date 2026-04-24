@@ -28,28 +28,28 @@ export default async function AdminUsersPage() {
       />
       <div className="p-8 space-y-6">
         <div className="card p-5">
-          <h3 className="font-display font-semibold text-navy-800 mb-3">Role reference</h3>
+          <h3 className="font-display font-semibold text-nurock-black mb-3">Role reference</h3>
           <dl className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
             {(Object.entries(ROLE_DESCRIPTION) as Array<[UserRole, string]>).map(([role, desc]) => (
               <div key={role} className="flex gap-3">
-                <span className="badge bg-navy-100 text-navy-800 h-5 shrink-0 capitalize">
+                <span className="badge badge-navy h-5 shrink-0 capitalize">
                   {role.replace(/_/g, " ")}
                 </span>
-                <span className="text-tan-800">{desc}</span>
+                <span className="text-nurock-slate">{desc}</span>
               </div>
             ))}
           </dl>
         </div>
 
         <div className="card overflow-hidden">
-          <div className="px-5 py-3 border-b border-navy-100 flex items-center justify-between">
-            <h3 className="font-display font-semibold text-navy-800">Active users</h3>
+          <div className="px-5 py-3 border-b border-nurock-border flex items-center justify-between">
+            <h3 className="font-display font-semibold text-nurock-black">Active users</h3>
             <button disabled className="btn-primary opacity-60" title="Coming in next phase">
               Invite user
             </button>
           </div>
           <table className="min-w-full text-sm">
-            <thead className="bg-navy-50 text-left text-xs uppercase tracking-wide text-tan-700">
+            <thead className="bg-[#FAFBFC] text-left text-xs uppercase tracking-wide text-nurock-slate">
               <tr>
                 <th className="px-4 py-3 font-medium">User</th>
                 <th className="px-4 py-3 font-medium">Role</th>
@@ -59,10 +59,10 @@ export default async function AdminUsersPage() {
                 <th className="px-4 py-3 font-medium">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-navy-50">
+            <tbody className="divide-y divide-nurock-border">
               {(data ?? []).length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-tan-700">
+                  <td colSpan={6} className="px-4 py-10 text-center text-nurock-slate">
                     No user profiles yet. Sign in with a NuRock email once and an admin can
                     elevate your role from the Supabase dashboard.
                   </td>
@@ -71,8 +71,8 @@ export default async function AdminUsersPage() {
                 (data ?? []).map((u: any) => (
                   <tr key={u.id}>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-navy-800">{u.full_name ?? u.email}</div>
-                      <div className="text-xs text-tan-700">{u.email}</div>
+                      <div className="font-medium text-nurock-black">{u.full_name ?? u.email}</div>
+                      <div className="text-xs text-nurock-slate">{u.email}</div>
                     </td>
                     <td className="px-4 py-3 capitalize">{u.role.replace(/_/g, " ")}</td>
                     <td className="px-4 py-3 text-xs">
@@ -87,7 +87,7 @@ export default async function AdminUsersPage() {
                       {u.can_approve_variance_flagged ? "Allowed" : "Not allowed"}
                     </td>
                     <td className="px-4 py-3">
-                      <span className={cn("badge", u.active ? "bg-green-100 text-green-800" : "bg-tan-100 text-tan-800")}>
+                      <span className={cn("badge", u.active ? "badge-green" : "bg-nurock-flag-slate-bg text-nurock-slate")}>
                         {u.active ? "Active" : "Inactive"}
                       </span>
                     </td>

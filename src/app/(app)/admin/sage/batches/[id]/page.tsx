@@ -45,7 +45,7 @@ export default async function SageBatchDetailPage({ params }: { params: { id: st
         </div>
 
         <div className="card p-5">
-          <h3 className="font-display font-semibold text-navy-800 mb-3">Lifecycle</h3>
+          <h3 className="font-display font-semibold text-nurock-black mb-3">Lifecycle</h3>
           <ol className="space-y-2 text-sm">
             <Event label="Generated" at={batch.generated_at} active={!!batch.generated_at} />
             <Event label="Downloaded" at={batch.downloaded_at} active={!!batch.downloaded_at} />
@@ -68,11 +68,11 @@ export default async function SageBatchDetailPage({ params }: { params: { id: st
         />
 
         <div className="card overflow-hidden">
-          <div className="px-5 py-3 border-b border-navy-100">
-            <h3 className="font-display font-semibold text-navy-800">Invoices in this batch</h3>
+          <div className="px-5 py-3 border-b border-nurock-border">
+            <h3 className="font-display font-semibold text-nurock-black">Invoices in this batch</h3>
           </div>
-          <table className="min-w-full text-sm divide-y divide-navy-100">
-            <thead className="bg-navy-50/50 text-left text-xs uppercase tracking-wide text-tan-700">
+          <table className="min-w-full text-sm divide-y divide-nurock-border">
+            <thead className="bg-[#FAFBFC] text-left text-xs uppercase tracking-wide text-nurock-slate">
               <tr>
                 <th className="px-4 py-2 font-medium">Property</th>
                 <th className="px-4 py-2 font-medium">Vendor</th>
@@ -82,13 +82,13 @@ export default async function SageBatchDetailPage({ params }: { params: { id: st
                 <th className="px-4 py-2 font-medium">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-navy-50">
+            <tbody className="divide-y divide-nurock-border">
               {(invoices ?? []).map((inv: any) => (
                 <tr key={inv.id}>
                   <td className="px-4 py-2 font-medium">{inv.property?.code}</td>
                   <td className="px-4 py-2">{inv.vendor?.name}</td>
                   <td className="px-4 py-2 font-mono text-xs">
-                    <Link href={`/invoices/${inv.id}`} className="text-navy-700 hover:underline">
+                    <Link href={`/invoices/${inv.id}`} className="text-nurock-navy hover:underline">
                       {inv.invoice_number}
                     </Link>
                   </td>
@@ -101,7 +101,7 @@ export default async function SageBatchDetailPage({ params }: { params: { id: st
           </table>
         </div>
 
-        <Link href="/admin/sage/batches" className="text-sm text-navy-600 hover:underline">
+        <Link href="/admin/sage/batches" className="text-sm text-nurock-navy hover:underline">
           ← All batches
         </Link>
       </div>
@@ -112,8 +112,8 @@ export default async function SageBatchDetailPage({ params }: { params: { id: st
 function Fact({ label, value }: { label: string; value: string }) {
   return (
     <div className="card p-4">
-      <div className="text-xs uppercase tracking-wide text-tan-700">{label}</div>
-      <div className="text-lg font-semibold text-navy-800 mt-1 capitalize">{value}</div>
+      <div className="text-xs uppercase tracking-wide text-nurock-slate">{label}</div>
+      <div className="text-lg font-semibold text-nurock-black mt-1 capitalize">{value}</div>
     </div>
   );
 }
@@ -123,11 +123,11 @@ function Event({ label, at, active }: { label: string; at: string | null; active
     <li className="flex items-start gap-3">
       <div className={cn(
         "w-2 h-2 rounded-full mt-1.5 shrink-0",
-        active ? "bg-navy" : "bg-navy-100",
+        active ? "bg-navy" : "bg-nurock-flag-navy-bg",
       )} />
       <div className="flex-1">
-        <div className={cn("text-sm", active ? "text-ink" : "text-tan-500")}>{label}</div>
-        {at && <div className="text-xs text-tan-700">{formatDate(at)}</div>}
+        <div className={cn("text-sm", active ? "text-ink" : "text-nurock-slate-light")}>{label}</div>
+        {at && <div className="text-xs text-nurock-slate">{formatDate(at)}</div>}
       </div>
     </li>
   );

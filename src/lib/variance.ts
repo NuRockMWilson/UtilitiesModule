@@ -326,3 +326,109 @@ export function summarizeCategoryVariances(results: CategoryVarianceResult[]): s
     })
     .join(", ");
 }
+
+// ============================================================================
+// Unit-normalized variance (Priority 4 — trash/garbage)
+// ============================================================================
+// For bills where cost scales with service-unit count (trash pickups,
+// FedEx deliveries, temporary-container rentals), comparing absolute dollars
+// to a trailing baseline produces false positives. The real question is:
+// "did cost per pickup change?" not "did monthly cost change?"
+//
+// This runs the same baseline + exclusion rules as the per-invoice engine,
+// but on cost-per-unit instead of absolute cost or daily cost.
+
+export interface UnitNormalizedInput {
+  currentAmount:  number | null;
+  currentUnits:   number | null;
+  priorInvoices:  {
+    service_period_end:    Date | string | null;
+    total_amount_due:      number | null;
+    units_billed:          number | null;
+    exclude_from_baseline: boolean;
+    variance_flagged:      boolean;
+    variance_explanation:  string | null;
+  }[];
+  thresholdPct:   number;
+  windowMonths:   number;
+  asOf?:          Date;
+}
+
+export interface UnitNormalizedResult {
+  baseline:           number | null;    // baseline $/unit
+  baselineSampleSize: number;
+  currentValue:       number | null;    // current $/unit
+  variancePct:        number | null;
+  flagged:            boolean;
+  basis:              "dollars_per_unit" | "insufficient_history";
+  reason?:            string;
+}
+
+/**
+ * Compute variance on a $/unit basis, excluding bills without a unit count.
+ *
+ * Example usage for a trash bill:
+ *   computeUnitNormalizedVariance({
+ *     currentAmount: 4200,
+ *     currentUnits:  5,            // pickups
+ *     priorInvoices: [...last 12 trash bills for this account],
+ *     thresholdPct:  3.0,
+ *     windowMonths:  12,
+ *   })
+ */
+export function computeUnitNormalizedVariance(
+  input: UnitNormalizedInput,
+): UnitNormalizedResult {
+  const asOf = input.asOf ?? new Date();
+  const windowStart = new Date(asOf);
+  windowStart.setMonth(windowStart.getMonth() - input.windowMonths);
+
+  const currentValue =
+    input.currentAmount !== null && input.currentUnits && input.currentUnits > 0
+      ? input.currentAmount / input.currentUnits
+      : null;
+
+  const sample = input.priorInvoices
+    .filter(p => !p.exclude_from_baseline)
+    .filter(p => !(p.variance_flagged && !p.variance_explanation))
+    .filter(p => inWindow(p.service_period_end, windowStart, asOf))
+    .filter(p => p.total_amount_due !== null && p.units_billed !== null && p.units_billed > 0)
+    .map(p => p.total_amount_due! / p.units_billed!)
+    .filter((v): v is number => v > 0);
+
+  if (sample.length < 2) {
+    return {
+      baseline: null,
+      baselineSampleSize: sample.length,
+      currentValue,
+      variancePct: null,
+      flagged: false,
+      basis: "insufficient_history",
+      reason: `Only ${sample.length} prior bill(s) with unit counts in trailing ${input.windowMonths} months. A baseline needs at least 2.`,
+    };
+  }
+
+  const baseline = sample.reduce((a, b) => a + b, 0) / sample.length;
+
+  if (currentValue === null) {
+    return {
+      baseline,
+      baselineSampleSize: sample.length,
+      currentValue: null,
+      variancePct: null,
+      flagged: false,
+      basis: "dollars_per_unit",
+      reason: "Current bill has no unit count — cannot normalize.",
+    };
+  }
+
+  const variancePct = ((currentValue - baseline) / baseline) * 100;
+  return {
+    baseline,
+    baselineSampleSize: sample.length,
+    currentValue,
+    variancePct,
+    flagged: variancePct > input.thresholdPct,
+    basis: "dollars_per_unit",
+  };
+}
