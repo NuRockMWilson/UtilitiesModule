@@ -200,12 +200,19 @@ def emit_vendors(water, hse_meters, garbage, phone_cable):
     for src, cat in ((water, "water"),
                      (hse_meters, "electric"),
                      (garbage, "trash"),
-                     (phone_cable, "telecom")):
+                     (phone_cable, "phone")):
         for code, data in src.items():
+            # Sheet-level vendor
             name = data.get("vendor_name")
             if name and name not in seen:
                 seen.add(name)
                 vendor_category[name] = cat
+            # Per-row vendors (Phone&Cable typically has these)
+            for acct in data.get("accounts", []):
+                rv = acct.get("vendor_name")
+                if rv and rv not in seen:
+                    seen.add(rv)
+                    vendor_category[rv] = cat
 
     if not seen:
         return "\n".join(lines + [""])
@@ -230,16 +237,17 @@ def emit_utility_accounts(all_data, gl_mapping):
     rows = []  # (property_code, vendor_name, gl_code, account_number, description, meter_id, active)
 
     for pc, data in sorted(all_data.items()):
-        vendor_name = data.get("vendor_name") or "Unknown vendor"
+        sheet_vendor = data.get("vendor_name") or "Unknown vendor"
         for acct in data.get("accounts", []):
             acct_num = acct.get("account_number")
             if not acct_num:
                 continue
             desc    = acct.get("description") or acct.get("meter_id") or ""
             meter   = acct.get("meter_id")
+            # Per-row vendor takes precedence (Phone&Cable). Fall back to sheet vendor.
+            vendor_name = acct.get("vendor_name") or sheet_vendor
 
             if callable(gl_mapping):
-                # Water emits multiple GL accounts per account_number (5120+5125+5122)
                 gls = gl_mapping(acct)
             else:
                 gls = [gl_mapping]
@@ -373,14 +381,16 @@ def emit_simple_invoices(all_data, gl_code, source_ref_tag):
     rows = []
 
     for pc, data in sorted(all_data.items()):
-        vendor_name = data.get("vendor_name") or ""
-        inv_base    = data.get("invoice_number_base") or ""
-        year        = data.get("year", date.today().year)
-        sheet_gl    = data.get("gl_code", gl_code)
+        sheet_vendor = data.get("vendor_name") or ""
+        inv_base     = data.get("invoice_number_base") or ""
+        year         = data.get("year", date.today().year)
+        sheet_gl     = data.get("gl_code", gl_code)
 
         for acct in data.get("accounts", []):
             an = acct.get("account_number")
             if not an: continue
+            # Per-row vendor takes precedence (Phone&Cable)
+            vendor_name = acct.get("vendor_name") or sheet_vendor
             for month, md in acct.get("by_month", {}).items():
                 amount = md.get("amount") if isinstance(md, dict) else md
                 if not amount or amount <= 0: continue

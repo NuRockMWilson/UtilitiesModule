@@ -123,25 +123,48 @@ def _identify_role_columns_per_month(ws, label_row, month_cols):
     return roles_by_month
 
 
-def _find_vendor_header(ws):
-    """Grab vendor name + code from rows 1-4 of the sheet."""
-    vendor_name, vendor_code = None, None
-    for r in range(1, 6):
+def _find_vendor_header(ws, sheet_type="water"):
+    """Grab vendor name + code from rows 1-10 of the sheet.
+
+    Each sheet type has its vendor name in a different row:
+      - Water:       row 2 col 1  ('Town of Davie - Utility Payments' | 'Town-D')
+      - Hse Meters:  row 7 col 1  ('FL Power Light Company' | 'FL Power')
+      - Garbage:     row 3 col 1  ('Waste Management' | 'CoastalWR')
+      - FedEx:       row 2 col 1  ('FedEx' | 'FedEx')
+      - Phone&Cable: per-row in column 2 — no sheet-level vendor
+
+    Different sheet types use different vendor-category vocabulary (utility,
+    electric, power, waste, sanitation, etc.) so we accept any reasonably
+    business-looking string sitting next to a short vendor code in col 2.
+    """
+    vendor_keywords = (
+        "utility", "utilities", "water", "county", "city of", "municipal",
+        "power", "electric", "light", "energy",        # electric utilities
+        "waste", "sanitation", "recycling", "disposal", "management",  # trash
+        "fedex", "ups", "shipping",                    # parcel
+    )
+    for r in range(1, 11):
         a = ws.cell(r, 1).value
         b = ws.cell(r, 2).value
-        if isinstance(a, str):
-            s = a.strip()
-            lo = s.lower()
-            # Vendor name markers
-            if ("utility" in lo or "utilities" in lo or "water" in lo
-                or "county" in lo or "city of" in lo or "municipal" in lo) \
-               and "500-" not in s and "year" not in lo \
-               and len(s) > 6 and not re.match(r"^\d", s):
-                vendor_name = s
-                if isinstance(b, str) and b.strip() and len(b.strip()) < 25:
-                    vendor_code = b.strip()
-                break
-    return vendor_name, vendor_code
+        if not isinstance(a, str): continue
+        s = a.strip()
+        lo = s.lower()
+        # Reject header-ish rows
+        if not s or "500-" in s or "year" in lo or "invoice" in lo or "account" in lo:
+            continue
+        if re.match(r"^\d", s):
+            continue
+        # Keyword match OR "column A is long-ish business name with a short code in column B"
+        if any(k in lo for k in vendor_keywords) and len(s) > 3:
+            vendor_name = s
+            vendor_code = b.strip() if isinstance(b, str) and b.strip() and len(b.strip()) < 25 else None
+            return vendor_name, vendor_code
+        # Fallback: accept any row where A is 4+ chars alpha/space and B is a short code (<=15 chars)
+        if (len(s) >= 4 and re.search(r"[A-Za-z]{3,}", s)
+                and isinstance(b, str) and b.strip() and 1 < len(b.strip()) <= 15
+                and not re.match(r"^\d", b.strip())):
+            return s, b.strip()
+    return None, None
 
 
 def _find_invoice_base(ws):
@@ -431,13 +454,13 @@ def parse_garbage_accounts(ws, year):
 
 def parse_phone_cable_accounts(ws, year):
     """
-    Phone & Cable sheet — header row like:
-      Phone 500-601-5635 | Vendor | ACCOUNT NO. | JAN | FEB | ...
-    Vendor code is col 2, Account No. col 3, month columns start col 4.
-    Returns 2 tables: phone and cable. This is a best-effort single-GL pass;
-    all rows are tagged with the GL code from the sheet header (phone OR cable).
+    Phone & Cable sheet — per-row vendor (col 2) and account number (col 3).
+    Header row typically: [GL | Vendor | ACCOUNT NO. | JAN | FEB | ...]
+    Each row has its own vendor (Comcast, Level3, AT&T, etc.) — no single sheet vendor.
+
+    Returns accounts with per-row 'vendor_name' tagged onto each account so the
+    SQL emitter can use them instead of falling back to the sheet vendor.
     """
-    # Detect whether this sheet covers Phone (5635), Cable (5140), or both
     gl_code = "5635"
     for r in range(1, 8):
         for c in range(1, 10):
@@ -446,8 +469,69 @@ def parse_phone_cable_accounts(ws, year):
                 gl_code = "5140"
                 break
 
-    return _scan_simple_grid(ws, year, gl_code=gl_code,
-                             account_col=3, description_col=1, meter_col=2)
+    header_row, month_cols = _find_month_header_row(ws)
+    if not month_cols or len(month_cols) < 4:
+        return None
+
+    invoice_base = _find_invoice_base(ws)
+    accounts = []
+    seen = set()
+
+    for r in range(header_row + 1, min(header_row + 80, ws.max_row + 1)):
+        description  = ws.cell(r, 1).value  # e.g. "Comcast-leasing office ph"
+        vendor_cell  = ws.cell(r, 2).value  # e.g. "Comcast"
+        acct_cell    = ws.cell(r, 3).value  # e.g. "8495 75 262 1217919"
+
+        # Stop at total rows
+        if _is_label(description) and description.strip().lower().startswith(("total", "adjust")):
+            break
+
+        # Parse fields
+        desc = description.strip() if isinstance(description, str) and description.strip() else None
+        row_vendor = vendor_cell.strip() if isinstance(vendor_cell, str) and vendor_cell.strip() else None
+        acct_num = None
+        if isinstance(acct_cell, str) and acct_cell.strip():
+            s = acct_cell.strip()
+            if re.search(r"\d{3,}", s) or re.search(r"[A-Za-z]+.*\d+", s):
+                acct_num = s
+
+        if not acct_num and not desc:
+            continue
+
+        effective_id = acct_num or f"desc:{(desc or '')[:40]}"
+        if effective_id in seen:
+            continue
+
+        # Collect monthly amounts
+        by_month = {}
+        for month_col, month_num in month_cols:
+            v = _dec(ws.cell(r, month_col).value)
+            if v is None or v == 0: continue
+            by_month[month_num] = {"amount": float(v)}
+
+        if not by_month:
+            continue
+
+        seen.add(effective_id)
+        accounts.append({
+            "account_number": acct_num,
+            "description":    desc,
+            "meter_id":       None,
+            "vendor_name":    row_vendor,     # per-row vendor — emitter uses this
+            "by_month":       by_month,
+        })
+
+    if not accounts:
+        return None
+    return {
+        "vendor_name":         None,  # no sheet-level vendor — accounts carry their own
+        "vendor_code":         None,
+        "invoice_number_base": invoice_base,
+        "year":                year,
+        "gl_code":             gl_code,
+        "accounts":            accounts,
+        "fees":                [],
+    }
 
 
 def parse_fedex_accounts(ws, year):
