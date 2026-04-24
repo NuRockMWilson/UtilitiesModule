@@ -79,26 +79,12 @@ export default async function CommsDetailPage({
         .in("gl_account_id", glIds)
     : { data: [] };
 
-  const orphansByGL = new Set<string>();
-  for (const i of (invRaw ?? []) as any[]) {
-    if (i.utility_account_id) continue;
-    const gl = glCodeById.get(i.gl_account_id) as string | undefined;
-    if (gl === "5140" || gl === "5635") orphansByGL.add(gl);
-  }
-  for (const gl of orphansByGL) {
-    accountsByGL[gl].push({
-      id:             `__summary-${gl}`,
-      account_number: `HIST-${property.code}`,
-      description:    "Summary rollup (historical)",
-    });
-  }
-
   const invoices = (invRaw ?? []).map((i: any) => {
     const gl = glCodeById.get(i.gl_account_id) as string | undefined;
     return {
       id:             i.id as string,
       invoice_number: i.invoice_number as string | null,
-      account_id:     (i.utility_account_id ?? (gl ? `__summary-${gl}` : null)) as string | null,
+      account_id:     i.utility_account_id as string | null,
       date:           (i.service_period_end ?? i.invoice_date) as string | null,
       amount:         Number(i.total_amount_due ?? 0),
     };

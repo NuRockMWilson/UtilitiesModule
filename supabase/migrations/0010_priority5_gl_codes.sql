@@ -7,18 +7,20 @@
 -- tracker — attorney fees, carpet cleaning, contract painting, etc.
 --
 -- Add the ones needed to avoid orphaning FIXED-sheet rows during import.
+-- These are non-utility categories (maintenance/admin/capital) that don't
+-- map to any utility_category enum value, so we tag them 'other'.
 -- ============================================================================
 
-insert into gl_accounts (code, description, category) values
-    ('5210', 'Carpet Cleaning',          'maintenance'),
-    ('5225', 'Contract Painting',        'maintenance'),
-    ('5345', 'Fire & Safety',            'services'),
-    ('5615', 'Administrative Fees',      'administration'),
-    ('5655', 'Legal Fees',               'administration'),
-    ('5660', 'Memberships & Dues',       'administration'),
-    ('5715', 'Pest Control',             'services'),
-    ('6020', 'Flooring',                 'capital'),
-    ('6085', 'Appliances',               'capital')
+insert into gl_accounts (code, description, utility_category) values
+    ('5210', 'Carpet Cleaning',          'other'),
+    ('5225', 'Contract Painting',        'other'),
+    ('5345', 'Fire & Safety',            'other'),
+    ('5615', 'Administrative Fees',      'other'),
+    ('5655', 'Legal Fees',               'other'),
+    ('5660', 'Memberships & Dues',       'other'),
+    ('5715', 'Pest Control',             'other'),
+    ('6020', 'Flooring',                 'other'),
+    ('6085', 'Appliances',               'other')
 on conflict (code) do nothing;
 
 -- Phone&Cable sheets reference 5140 (Cable TV) separately from 5635 (Phone).

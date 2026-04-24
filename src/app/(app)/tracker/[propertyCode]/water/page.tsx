@@ -93,34 +93,12 @@ export default async function WaterDetailPage({
         .in("gl_account_id", glIds)
     : { data: [] };
 
-  // Build synthetic "Summary rollup" accounts for invoices that have no
-  // utility_account_id — one per GL code that actually has such orphan
-  // invoices. Keyed on a sentinel id that won't collide with real UUIDs.
-  const syntheticAccountsByGL = new Map<string, AccountRow>();
-  for (const i of (invRaw ?? []) as any[]) {
-    if (i.utility_account_id) continue;
-    const gl = glById.get(i.gl_account_id) as { code: string; description: string } | undefined;
-    if (!gl) continue;
-    if (!syntheticAccountsByGL.has(gl.code)) {
-      syntheticAccountsByGL.set(gl.code, {
-        id:             `__summary-${gl.code}`,
-        account_number: `HIST-${property.code}`,
-        description:    "Summary rollup (historical)",
-        category:       gl.code === "5125" ? "Sewer" : gl.code === "5122" ? "Irrigation" : "Water",
-      });
-    }
-  }
-  for (const acct of syntheticAccountsByGL.values()) accounts.push(acct);
-
   const invoices = (invRaw ?? []).map((i: any) => {
     const gl = glById.get(i.gl_account_id) as { code: string } | undefined;
-    // Route orphan invoices (no utility_account_id) to the synthetic rollup
-    const accountId = i.utility_account_id
-      ?? (gl ? `__summary-${gl.code}` : null);
     return {
       id:             i.id as string,
       invoice_number: i.invoice_number as string | null,
-      account_id:     accountId as string | null,
+      account_id:     i.utility_account_id as string | null,
       gl_code:        gl?.code as string | undefined,
       date:           (i.service_period_end ?? i.invoice_date) as string | null,
       amount:         Number(i.total_amount_due ?? 0),

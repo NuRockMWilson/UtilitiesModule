@@ -93,16 +93,6 @@ export default async function MetersDetailPage({
         .in("gl_account_id", glIds)
     : { data: [] };
 
-  const hasOrphanInvoices = (invRaw ?? []).some((i: any) => !i.utility_account_id);
-  if (hasOrphanInvoices) {
-    accounts.push({
-      id:             "__summary-electric",
-      account_number: `HIST-${property.code}`,
-      description:    "Summary rollup (historical)",
-      category:       "Other",
-    });
-  }
-
   const invoices = (invRaw ?? []).map((i: any) => ({
     id:             i.id as string,
     invoice_number: i.invoice_number as string | null,

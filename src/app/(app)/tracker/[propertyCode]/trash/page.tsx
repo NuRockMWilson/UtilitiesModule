@@ -76,15 +76,6 @@ export default async function TrashDetailPage({
         .eq("gl_account_id", glRow.id)
     : { data: [] };
 
-  const hasOrphanInvoices = (invRaw ?? []).some((i: any) => !i.utility_account_id);
-  if (hasOrphanInvoices) {
-    accounts.push({
-      id:             "__summary-trash",
-      account_number: `HIST-${property.code}`,
-      description:    "Summary rollup (historical)",
-    });
-  }
-
   const invoices = (invRaw ?? []).map((i: any) => ({
     id:             i.id as string,
     invoice_number: i.invoice_number as string | null,
