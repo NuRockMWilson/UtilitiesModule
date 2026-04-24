@@ -73,22 +73,24 @@ export default async function DashboardPage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <AttentionCard
               label="Variance flagged"
-              value={formatNumber(flagged)}
+              count={flagged}
               href="/invoices?flagged=true"
               tone="amber"
               note="Bills above baseline threshold awaiting explanation"
             />
             <AttentionCard
               label="Due within 3 days"
-              value={formatNumber(dueSoon)}
-              sub={formatDollars(dueSoonAmount)}
+              count={dueSoon}
+              sub={dueSoon > 0 ? formatDollars(dueSoonAmount) : undefined}
               href="/invoices?due=soon"
               tone="red"
             />
             <AttentionCard
               label="Ready for approval"
-              value={formatNumber(byStatus.get("ready_for_approval")?.count ?? 0)}
-              sub={formatDollars(byStatus.get("ready_for_approval")?.amount ?? 0)}
+              count={byStatus.get("ready_for_approval")?.count ?? 0}
+              sub={(byStatus.get("ready_for_approval")?.count ?? 0) > 0
+                ? formatDollars(byStatus.get("ready_for_approval")?.amount ?? 0)
+                : undefined}
               href="/invoices?status=ready_for_approval"
               tone="navy"
             />
@@ -107,21 +109,43 @@ export default async function DashboardPage() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             {TILE_ORDER.map(status => {
               const c = byStatus.get(status);
+              const count = c?.count ?? 0;
+              const isEmpty = count === 0;
+              // Empty "New" and "Needs coding" tiles show an inline upload CTA
+              // — this is where the workflow starts, so an empty state should
+              // guide the user to action, not just display a zero.
+              const showUploadCta = isEmpty && (status === "new" || status === "needs_coding");
+
               return (
                 <Link
                   key={status}
-                  href={`/invoices?status=${status}`}
-                  className="kpi-tile hover:shadow-card-h transition-shadow"
+                  href={showUploadCta ? "/invoices/upload" : `/invoices?status=${status}`}
+                  className={cn(
+                    "kpi-tile hover:shadow-card-h transition-shadow",
+                    isEmpty && "opacity-80",
+                  )}
                 >
                   <div className="kpi-label truncate">
                     {status.replace(/_/g, " ")}
                   </div>
-                  <div className="kpi-value num">
-                    {formatNumber(c?.count ?? 0)}
+                  <div className={cn(
+                    "kpi-value num",
+                    isEmpty && "text-nurock-slate-light"
+                  )}>
+                    {formatNumber(count)}
                   </div>
-                  <div className="kpi-sub num">
-                    {formatDollars(c?.amount ?? 0, { cents: false })}
-                  </div>
+                  {showUploadCta ? (
+                    <div className="kpi-sub mt-1 text-nurock-navy font-medium inline-flex items-center gap-1">
+                      <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+                        <path d="M10 3a1 1 0 011 1v8.586l2.293-2.293a1 1 0 011.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 12.586V4a1 1 0 011-1z" transform="rotate(180 10 10)"/>
+                      </svg>
+                      Upload a bill
+                    </div>
+                  ) : (
+                    <div className="kpi-sub num">
+                      {formatDollars(c?.amount ?? 0, { cents: false })}
+                    </div>
+                  )}
                 </Link>
               );
             })}
@@ -145,22 +169,37 @@ export default async function DashboardPage() {
 }
 
 function AttentionCard({
-  label, value, sub, note, href, tone,
+  label, count, sub, note, href, tone,
 }: {
-  label: string; value: string; sub?: string; note?: string;
+  label: string; count: number; sub?: string; note?: string;
   href: string; tone: "amber" | "red" | "navy";
 }) {
+  // Tone is only applied when there's actually something in the queue.
+  // An Attention tile showing "0" should look calm, not alarming — otherwise
+  // users learn to ignore the color system.
+  const active = count > 0;
+  const appliedTone = active ? tone : "";
   return (
     <Link
       href={href}
-      className={cn("kpi-tile block hover:shadow-card-h transition-shadow", tone)}
+      className={cn(
+        "kpi-tile block hover:shadow-card-h transition-shadow",
+        appliedTone,
+        !active && "opacity-70",
+      )}
     >
       <div className="kpi-label">{label}</div>
       <div className="flex items-baseline gap-3 mt-1">
-        <div className="kpi-value text-[28px] num">{value}</div>
+        <div className={cn(
+          "kpi-value text-[28px] num",
+          !active && "text-nurock-slate-light"
+        )}>
+          {formatNumber(count)}
+        </div>
         {sub && <div className="text-[12.5px] text-nurock-slate num">{sub}</div>}
       </div>
-      {note && <div className="kpi-sub mt-2">{note}</div>}
+      {note && active && <div className="kpi-sub mt-2">{note}</div>}
+      {!active && <div className="kpi-sub mt-2 text-nurock-slate-light italic">All caught up</div>}
     </Link>
   );
 }

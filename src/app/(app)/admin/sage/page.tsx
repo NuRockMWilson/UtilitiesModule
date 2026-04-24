@@ -26,6 +26,10 @@ export default async function AdminSagePage() {
         title="Sage integration"
         subtitle="Per-property Sage system assignment and health of each adapter"
       />
+      <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center gap-6">
+        <ConnectionStatus name="Sage 300 CRE" health={cre300} />
+        <ConnectionStatus name="Sage Intacct" health={intacct} />
+      </div>
       <div className="p-8 space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <AdapterCard
@@ -117,6 +121,45 @@ function AdapterCard({
         <div className="text-xs text-nurock-slate mt-1">{health.detail}</div>
       </div>
       <p className="text-xs text-nurock-slate mt-3">{note}</p>
+    </div>
+  );
+}
+
+/**
+ * Compact connection indicator used in the page subheader — a pulsing dot
+ * for immediate at-a-glance feedback on whether each adapter is healthy.
+ * Green = ok; amber = not ready / missing config.
+ */
+function ConnectionStatus({
+  name,
+  health,
+}: {
+  name: string;
+  health: { ok: boolean; detail: string };
+}) {
+  return (
+    <div
+      className="flex items-center gap-2 text-[12.5px]"
+      title={`${name}: ${health.detail}`}
+    >
+      <span className="relative inline-flex w-2.5 h-2.5">
+        <span className={cn(
+          "absolute inset-0 rounded-full",
+          health.ok ? "bg-flag-green" : "bg-flag-yellow",
+        )} />
+        {health.ok && (
+          <span className="absolute inset-0 rounded-full bg-flag-green opacity-40 animate-ping" />
+        )}
+      </span>
+      <span className="font-display text-[11px] uppercase tracking-[0.08em] text-nurock-slate">
+        {name}
+      </span>
+      <span className={cn(
+        "font-medium",
+        health.ok ? "text-nurock-black" : "text-flag-red",
+      )}>
+        {health.ok ? "Connected" : "Not ready"}
+      </span>
     </div>
   );
 }
