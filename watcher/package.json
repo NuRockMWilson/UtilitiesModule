@@ -1,0 +1,19 @@
+{
+  "name": "nurock-utilities-watcher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Folder watcher that POSTs new PDF invoices to the NuRock Utilities AP intake endpoint",
+  "type": "module",
+  "main": "watch-folder.mjs",
+  "scripts": {
+    "start":   "node watch-folder.mjs",
+    "install-service": "node install-windows-service.mjs",
+    "remove-service":  "node remove-windows-service.mjs"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0"
+  },
+  "optionalDependencies": {
+    "node-windows": "^1.0.0-beta.8"
+  }
+}

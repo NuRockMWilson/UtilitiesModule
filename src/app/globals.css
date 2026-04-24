@@ -1,0 +1,68 @@
+@import url("https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --nurock-navy: #164576;
+    --nurock-tan:  #B4AE92;
+  }
+
+  html, body {
+    background-color: theme("colors.paper");
+    color:            theme("colors.ink");
+    font-family:      theme("fontFamily.sans");
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family:   theme("fontFamily.display");
+    font-weight:   600;
+    letter-spacing: -0.01em;
+  }
+
+  /* Tabular numbers by default — critical for financial tables */
+  .tabular, table td, table th {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium
+           transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-navy text-white hover:bg-navy-700 focus:ring-navy-500;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-ink border border-navy-200 hover:bg-navy-50 focus:ring-navy-300;
+  }
+  .btn-danger {
+    @apply btn bg-flag-red text-white hover:bg-red-700 focus:ring-red-500;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-navy-600 hover:bg-navy-50;
+  }
+
+  .card {
+    @apply bg-white rounded-lg shadow-card border border-navy-100;
+  }
+
+  .input {
+    @apply block w-full rounded-md border border-navy-200 px-3 py-2 text-sm
+           placeholder:text-tan-600 focus:border-navy focus:ring-1 focus:ring-navy
+           disabled:bg-tan-50;
+  }
+
+  .label {
+    @apply block text-xs font-medium uppercase tracking-wide text-tan-700 mb-1;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+}
