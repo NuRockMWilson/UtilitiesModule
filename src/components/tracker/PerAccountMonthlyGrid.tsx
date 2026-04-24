@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { formatDollars } from "@/lib/format";
+import { NoteCell, type ExistingNote } from "./NoteCell";
 
 /**
  * Per-account monthly grid — matches the legacy spreadsheet layout that
@@ -8,16 +9,11 @@ import { formatDollars } from "@/lib/format";
  *   Account | Description      | Jan | Feb | Mar | ... | Dec | YTD
  *   -------------------------------------------------------------------
  *   xxxx-01 | #1 House         | $439| $510| $330| ... | —   | $1,597
- *   xxxx-02 | #2 House         | $115| $105| $113| ... | —   |   $441
  *   ...
  *   Total                        1,767 1,822 1,638                3,117
  *
- * Caller supplies:
- *   - accounts: one row per utility_account with its identifying metadata
- *   - amountsByAccountMonth: Map<accountId, { 1: 439, 2: 510, ... }>
- *
- * Each account row is clickable when `invoiceHrefByAccountMonth` provides a
- * link, letting the user jump into the individual bill.
+ * Each monthly amount cell also supports attaching notes — useful for
+ * documenting variance explanations like "irrigation leak repaired 3/15".
  */
 
 export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -43,6 +39,16 @@ export interface PerAccountMonthlyGridProps {
   middleHeader?: string;
   /** When true, show the category badge under the description */
   showCategory?: boolean;
+  /**
+   * If provided, each monthly amount cell becomes a NoteCell anchored to
+   * (property_id, utility_account_id, year, month). Omit to hide note UI.
+   */
+  noteAnchor?: {
+    property_id: string;
+    year:        number;
+    /** Map of "accountId:month" → ExistingNote[] */
+    notesByCell: Map<string, ExistingNote[]>;
+  };
 }
 
 export function PerAccountMonthlyGrid({
@@ -52,6 +58,7 @@ export function PerAccountMonthlyGrid({
   leftHeader   = "Account",
   middleHeader = "Description",
   showCategory = false,
+  noteAnchor,
 }: PerAccountMonthlyGridProps) {
   // Sort accounts by category + description for stable ordering
   const sortedAccounts = [...accounts].sort((a, b) => {
@@ -131,24 +138,45 @@ export function PerAccountMonthlyGrid({
                   )}
                 </td>
                 {monthly.map((v, i) => {
-                  const key = `${a.id}:${i + 1}`;
+                  const month = i + 1;
+                  const key = `${a.id}:${month}`;
                   const inv = invoiceHrefByAccountMonth?.get(key);
+                  const noteKey = `${a.id}:${month}`;
+                  const cellNotes = noteAnchor?.notesByCell.get(noteKey) ?? [];
+
+                  const valueContent = v !== null && v > 0 ? (
+                    inv ? (
+                      <Link
+                        href={`/invoices/${inv.id}`}
+                        className="text-nurock-navy hover:underline"
+                        title={inv.number ?? undefined}
+                      >
+                        {formatDollars(v)}
+                      </Link>
+                    ) : (
+                      formatDollars(v)
+                    )
+                  ) : (
+                    <span className="text-nurock-slate-light">—</span>
+                  );
+
                   return (
                     <td key={i} className="cell text-right num text-nurock-slate">
-                      {v !== null && v > 0 ? (
-                        inv ? (
-                          <Link
-                            href={`/invoices/${inv.id}`}
-                            className="text-nurock-navy hover:underline"
-                            title={inv.number ?? undefined}
-                          >
-                            {formatDollars(v)}
-                          </Link>
-                        ) : (
-                          formatDollars(v)
-                        )
+                      {noteAnchor && !a.id.startsWith("__summary-") ? (
+                        <NoteCell
+                          scope={{
+                            property_id:        noteAnchor.property_id,
+                            utility_account_id: a.id,
+                            year:               noteAnchor.year,
+                            month,
+                          }}
+                          existingNotes={cellNotes}
+                          label={`${a.description ?? a.account_number} · ${MONTHS[i]} ${noteAnchor.year}`}
+                        >
+                          {valueContent}
+                        </NoteCell>
                       ) : (
-                        <span className="text-nurock-slate-light">—</span>
+                        valueContent
                       )}
                     </td>
                   );

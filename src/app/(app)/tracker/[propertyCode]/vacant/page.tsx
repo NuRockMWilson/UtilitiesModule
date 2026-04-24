@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/layout/TopBar";
+import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars } from "@/lib/format";
 
 /**
@@ -29,6 +30,11 @@ export default async function VacantUnitsPage({
     .single();
 
   if (!property) notFound();
+
+  const { data: allProperties } = await supabase
+    .from("properties")
+    .select("code, name, full_code")
+    .order("code");
 
   const year = searchParams.year ? parseInt(searchParams.year, 10) : new Date().getFullYear();
 
@@ -118,6 +124,11 @@ export default async function VacantUnitsPage({
 
       <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center justify-between">
         <div className="flex items-center gap-2">
+          <PropertyPicker
+            currentCode={property.code}
+            properties={allProperties ?? []}
+            year={year}
+          />
           <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
             ← Summary
           </Link>

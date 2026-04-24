@@ -4,6 +4,8 @@ import { TopBar } from "@/components/layout/TopBar";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { formatDollars, formatNumber, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { PropertyPicker } from "@/components/tracker/PropertyPicker";
+import { NoteCell, type ExistingNote } from "@/components/tracker/NoteCell";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -24,6 +26,12 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
 
   if (!property) notFound();
 
+  // All properties for the picker dropdown
+  const { data: allProperties } = await supabase
+    .from("properties")
+    .select("code, name, full_code")
+    .order("code");
+
   const { data: glAccounts } = await supabase
     .from("gl_accounts")
     .select("id, code, description, utility_category")
@@ -42,6 +50,32 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
     .select("gl_account_id, month, amount")
     .eq("property_id", property.id)
     .eq("year", year);
+
+  // Summary-cell notes for this property × year. Filter client-side to those
+  // attached at the (gl_account_id, month) granularity — not account-level
+  // notes which belong on detail pages.
+  const { data: notesRaw } = await supabase
+    .from("monthly_notes")
+    .select("id, note, created_at, created_by_email, gl_account_id, month, utility_account_id")
+    .eq("property_id", property.id)
+    .eq("year", year)
+    .is("utility_account_id", null)
+    .is("invoice_id", null)
+    .order("created_at", { ascending: false });
+
+  const notesByCell = new Map<string, ExistingNote[]>();   // key = "glId:month"
+  for (const n of (notesRaw ?? []) as any[]) {
+    if (!n.gl_account_id || !n.month) continue;
+    const key = `${n.gl_account_id}:${n.month}`;
+    const arr = notesByCell.get(key) ?? [];
+    arr.push({
+      id:               n.id,
+      note:             n.note,
+      created_at:       n.created_at,
+      created_by_email: n.created_by_email,
+    });
+    notesByCell.set(key, arr);
+  }
 
   // Build the grid: row per GL × col per month
   const actualsByGLMonth = new Map<string, Map<number, number>>();
@@ -80,7 +114,12 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
       />
 
       <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          <PropertyPicker
+            currentCode={property.code}
+            properties={allProperties ?? []}
+            year={year}
+          />
           <YearPicker currentYear={year} propertyCode={property.code} />
         </div>
         <div className="flex items-center gap-2">
@@ -148,11 +187,25 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
                         <span className="text-nurock-black">{r.gl.description}</span>
                       )}
                     </td>
-                    {r.monthly.map((v, i) => (
-                      <td key={i} className="cell text-right num text-nurock-slate">
-                        {v > 0 ? formatDollars(v) : <span className="text-nurock-slate-light">–</span>}
-                      </td>
-                    ))}
+                    {r.monthly.map((v, i) => {
+                      const month = i + 1;
+                      const cellNotes = notesByCell.get(`${r.gl.id}:${month}`) ?? [];
+                      return (
+                        <td key={i} className="cell text-right num text-nurock-slate">
+                          <NoteCell
+                            scope={{
+                              property_id:   property.id,
+                              gl_account_id: r.gl.id,
+                              year, month,
+                            }}
+                            existingNotes={cellNotes}
+                            label={`${r.gl.description} · ${MONTHS[i]} ${year}`}
+                          >
+                            {v > 0 ? formatDollars(v) : <span className="text-nurock-slate-light">–</span>}
+                          </NoteCell>
+                        </td>
+                      );
+                    })}
                     <td className="cell text-right num font-semibold text-nurock-black bg-[#FAFBFC]">
                       {formatDollars(r.ytd)}
                     </td>

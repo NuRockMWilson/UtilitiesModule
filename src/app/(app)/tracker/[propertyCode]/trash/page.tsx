@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/layout/TopBar";
+import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars, formatPercent } from "@/lib/format";
 import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
 
@@ -32,18 +33,30 @@ export default async function TrashDetailPage({
     .single();
   if (!property) notFound();
 
+  const { data: allProperties } = await supabase
+    .from("properties")
+    .select("code, name, full_code")
+    .order("code");
+
   const year = searchParams.year ? parseInt(searchParams.year, 10) : new Date().getFullYear();
 
-  const { data: acctRaw } = await supabase
-    .from("utility_accounts")
-    .select(`
-      id, account_number, description,
-      gl_accounts!inner ( code ),
-      vendors ( name )
-    `)
-    .eq("property_id", property.id)
-    .eq("active", true)
-    .eq("gl_accounts.code", "5135");
+  const { data: glRow } = await supabase
+    .from("gl_accounts")
+    .select("id")
+    .eq("code", "5135")
+    .single();
+
+  const { data: acctRaw } = glRow
+    ? await supabase
+        .from("utility_accounts")
+        .select(`
+          id, account_number, description,
+          vendors ( name )
+        `)
+        .eq("property_id", property.id)
+        .eq("active", true)
+        .eq("gl_account_id", glRow.id)
+    : { data: [] };
 
   const accounts: AccountRow[] = (acctRaw ?? []).map((a: any) => ({
     id:             a.id,
@@ -52,19 +65,31 @@ export default async function TrashDetailPage({
     vendor_name:    a.vendors?.name ?? null,
   }));
 
-  const accountIds = accounts.map(a => a.id);
-  const { data: invRaw } = accountIds.length
+  // Pull every trash invoice for this property — tied to a utility_account or
+  // not. Historical Summary rows have no utility_account_id; route them to a
+  // synthetic "Summary rollup" row so dollars still appear.
+  const { data: invRaw } = glRow
     ? await supabase
         .from("invoices")
-        .select("id, invoice_number, utility_account_id, invoice_date, total_amount_due, units_billed, units_billed_label")
-        .in("utility_account_id", accountIds)
+        .select("id, invoice_number, utility_account_id, invoice_date, service_period_end, total_amount_due, units_billed, units_billed_label")
+        .eq("property_id", property.id)
+        .eq("gl_account_id", glRow.id)
     : { data: [] };
+
+  const hasOrphanInvoices = (invRaw ?? []).some((i: any) => !i.utility_account_id);
+  if (hasOrphanInvoices) {
+    accounts.push({
+      id:             "__summary-trash",
+      account_number: `HIST-${property.code}`,
+      description:    "Summary rollup (historical)",
+    });
+  }
 
   const invoices = (invRaw ?? []).map((i: any) => ({
     id:             i.id as string,
     invoice_number: i.invoice_number as string | null,
-    account_id:     i.utility_account_id as string,
-    date:           i.invoice_date as string | null,
+    account_id:     (i.utility_account_id ?? "__summary-trash") as string,
+    date:           (i.service_period_end ?? i.invoice_date) as string | null,
     amount:         Number(i.total_amount_due ?? 0),
     pickups:        i.units_billed ? Number(i.units_billed) : null,
     units_label:    i.units_billed_label as string | null,
@@ -92,6 +117,28 @@ export default async function TrashDetailPage({
     });
   }
 
+  // Per-account notes for this property × year (detail-tab notes are attached
+  // at the utility_account × month granularity).
+  const acctIdsForNotes = accounts.map(a => a.id).filter(id => !id.startsWith("__summary-"));
+  const { data: notesRaw } = acctIdsForNotes.length
+    ? await supabase
+        .from("monthly_notes")
+        .select("id, note, created_at, created_by_email, utility_account_id, month")
+        .eq("property_id", property.id)
+        .eq("year", year)
+        .in("utility_account_id", acctIdsForNotes)
+        .order("created_at", { ascending: false })
+    : { data: [] };
+  const notesByCell = new Map<string, Array<{id:string;note:string;created_at:string;created_by_email:string|null}>>();
+  for (const n of (notesRaw ?? []) as any[]) {
+    if (!n.utility_account_id || !n.month) continue;
+    const key = `${n.utility_account_id}:${n.month}`;
+    const arr = notesByCell.get(key) ?? [];
+    arr.push({ id: n.id, note: n.note, created_at: n.created_at, created_by_email: n.created_by_email });
+    notesByCell.set(key, arr);
+  }
+
+
   // Pickup stats for the current year
   const currentYearInvoices = invoices.filter(i => i.date?.startsWith(String(year)));
   const ytdTotal   = currentYearInvoices.reduce((s, i) => s + i.amount, 0);
@@ -114,9 +161,14 @@ export default async function TrashDetailPage({
       />
 
       <div className="px-8 py-4 bg-white border-b border-nurock-border flex items-center gap-2">
-        <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
-          ← Summary
-        </Link>
+        <PropertyPicker
+            currentCode={property.code}
+            properties={allProperties ?? []}
+            year={year}
+          />
+          <Link href={`/tracker/${property.code}?year=${year}`} className="btn-secondary">
+            ← Summary
+          </Link>
         <div className="flex items-center gap-1 ml-4">
           <span className="font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-nurock-slate mr-2">Year</span>
           {years.map(y => (
@@ -185,6 +237,7 @@ export default async function TrashDetailPage({
                   invoiceHrefByAccountMonth={invoiceByAccountMonth}
                   leftHeader="Account #"
                   middleHeader="Description"
+                  noteAnchor={{ property_id: property.id, year, notesByCell }}
                 />
               </section>
 
