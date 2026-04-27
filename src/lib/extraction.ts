@@ -16,51 +16,58 @@ import { z } from "zod";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// Helper — for LLM-extracted data, "missing" can show up as either null OR
+// an omitted key (which Zod sees as undefined). Treating both as equivalent
+// keeps validation tolerant of well-formed but partial extractions, which
+// is the realistic case: a Republic Services bill has no usage_readings, an
+// AT&T bill has no service_address in the spot we expect, etc.
+const nullish = <T extends z.ZodTypeAny>(t: T) => t.nullish().transform(v => v ?? null);
+
 export const ExtractedLineItem = z.object({
   description: z.string(),
-  amount: z.number(),
-  quantity: z.number().nullable().optional(),
-  unit: z.string().nullable().optional(),
+  amount:      z.number(),
+  quantity:    nullish(z.number()),
+  unit:        nullish(z.string()),
 });
 
 export const ExtractedUsageReading = z.object({
-  reading_type: z.enum(["water", "sewer", "irrigation", "electric", "gas"]).nullable(),
-  meter_start: z.number().nullable(),
-  meter_end: z.number().nullable(),
-  usage_amount: z.number().nullable(),
-  usage_unit: z.string().nullable(),
+  reading_type: nullish(z.enum(["water", "sewer", "irrigation", "electric", "gas"])),
+  meter_start:  nullish(z.number()),
+  meter_end:    nullish(z.number()),
+  usage_amount: nullish(z.number()),
+  usage_unit:   nullish(z.string()),
 });
 
 export const ExtractedBill = z.object({
-  vendor_name: z.string().nullable(),
-  account_number: z.string().nullable(),
-  invoice_number: z.string().nullable(),
-  invoice_date: z.string().nullable(),         // ISO YYYY-MM-DD
-  due_date: z.string().nullable(),
-  service_period_start: z.string().nullable(),
-  service_period_end: z.string().nullable(),
-  service_days: z.number().nullable(),
+  vendor_name:           nullish(z.string()),
+  account_number:        nullish(z.string()),
+  invoice_number:        nullish(z.string()),
+  invoice_date:          nullish(z.string()),       // ISO YYYY-MM-DD
+  due_date:              nullish(z.string()),
+  service_period_start:  nullish(z.string()),
+  service_period_end:    nullish(z.string()),
+  service_days:          nullish(z.number()),
 
-  service_address: z.string().nullable(),
-  remit_address: z.string().nullable(),
+  service_address:       nullish(z.string()),
+  remit_address:         nullish(z.string()),
 
-  line_items: z.array(ExtractedLineItem),
-  usage_readings: z.array(ExtractedUsageReading),
+  line_items:     z.array(ExtractedLineItem).default([]),
+  usage_readings: z.array(ExtractedUsageReading).default([]),
 
-  previous_balance: z.number().nullable(),
-  current_charges: z.number().nullable(),
-  adjustments: z.number().nullable(),
-  late_fees: z.number().nullable(),
-  total_amount_due: z.number().nullable(),
+  previous_balance: nullish(z.number()),
+  current_charges:  nullish(z.number()),
+  adjustments:      nullish(z.number()),
+  late_fees:        nullish(z.number()),
+  total_amount_due: nullish(z.number()),
 
   // Self-validation from the model
   reconciliation_check: z.object({
-    line_items_sum: z.number().nullable(),
-    matches_total: z.boolean(),
-    delta: z.number().nullable(),
-  }),
-  extraction_confidence: z.number().min(0).max(1),
-  warnings: z.array(z.string()),
+    line_items_sum: nullish(z.number()),
+    matches_total:  z.boolean().default(false),
+    delta:          nullish(z.number()),
+  }).default({ line_items_sum: null, matches_total: false, delta: null }),
+  extraction_confidence: z.number().min(0).max(1).default(0),
+  warnings:              z.array(z.string()).default([]),
 });
 
 export type ExtractedBillT = z.infer<typeof ExtractedBill>;
