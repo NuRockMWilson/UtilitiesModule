@@ -108,7 +108,17 @@ type MessageContentBlock =
   | { type: "document"; source: { type: "base64"; media_type: "application/pdf"; data: string } };
 
 export async function extractBill(input: ExtractInput): Promise<ExtractedBillT> {
-  const model = input.model ?? process.env.ANTHROPIC_EXTRACTION_MODEL ?? "claude-opus-4-7";
+  // Default to Sonnet 4.5 — capable enough for utility-bill structured
+  // extraction and ~5× cheaper / faster than Opus. Override via the
+  // ANTHROPIC_EXTRACTION_MODEL env var when you need Opus quality on a
+  // particular hard case.
+  //
+  // We sanitize the env value defensively: shell-style envs sometimes
+  // include trailing comments (`claude-sonnet-4-5  # cheaper`) which
+  // dotenv-style readers pass through verbatim, and the API rejects them
+  // with a 404 not_found_error.
+  const rawModel = input.model ?? process.env.ANTHROPIC_EXTRACTION_MODEL ?? "claude-sonnet-4-5";
+  const model = rawModel.split("#")[0].trim();
 
   if (!input.pdfBase64 && (!input.imageBase64 || input.imageBase64.length === 0)) {
     throw new Error("Either pdfBase64 or imageBase64 must be provided");
