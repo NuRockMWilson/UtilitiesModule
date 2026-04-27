@@ -8,7 +8,7 @@ export default async function EditVendorPage({ params }: { params: { id: string 
   const supabase = createSupabaseServerClient();
   const { data: vendor } = await supabase
     .from("vendors")
-    .select("id, name, short_name, category, sage_vendor_id, contact_email, contact_phone, active")
+    .select("id, name, short_name, category, sage_vendor_id, contact_email, contact_phone, remit_address, active")
     .eq("id", params.id)
     .single();
 

@@ -27,6 +27,7 @@ export type VendorFormValues = {
   sage_vendor_id?:   string | null;
   contact_email?:    string | null;
   contact_phone?:    string | null;
+  remit_address?:    string | null;
   active?:           boolean;
 };
 
@@ -36,10 +37,16 @@ export function VendorForm({ initial }: { initial?: VendorFormValues }) {
     null,
   );
   const isEdit = Boolean(initial?.id);
+  const hasDuplicates = !!state?.duplicateMatches && state.duplicateMatches.length > 0;
 
   return (
     <form action={formAction} className="card p-6 max-w-2xl space-y-5">
       {initial?.id && <input type="hidden" name="id" value={initial.id} />}
+
+      {/* Sticky override flag — present in DOM only when the user has been
+          shown the duplicate dialog and clicks "Create anyway". The hidden
+          input is rendered only inside that block so it doesn't trigger
+          on first submit. */}
 
       <Field label="Name" required hint="Full vendor name as it appears on bills.">
         <input name="name" defaultValue={initial?.name ?? ""} required maxLength={200}
@@ -78,6 +85,20 @@ export function VendorForm({ initial }: { initial?: VendorFormValues }) {
         </Field>
       </div>
 
+      <Field
+        label="Remit address"
+        hint="Where checks get mailed. Use this to distinguish multiple records of the same company billing different regions (e.g. 'Republic Services - Atlanta' vs 'Republic Services - Florida')."
+      >
+        <textarea
+          name="remit_address"
+          defaultValue={initial?.remit_address ?? ""}
+          rows={3}
+          maxLength={500}
+          className="input font-mono text-[12.5px]"
+          placeholder="REPUBLIC SERVICES #800&#10;PO BOX 71068&#10;CHARLOTTE NC 28272-1068"
+        />
+      </Field>
+
       <div className="flex items-center gap-2 pt-2">
         <input
           id="active"
@@ -97,8 +118,62 @@ export function VendorForm({ initial }: { initial?: VendorFormValues }) {
         </div>
       )}
 
+      {hasDuplicates && (
+        <div className="rounded-md border-l-4 border-l-flag-amber bg-[#FFF8E8] p-4 space-y-3">
+          <div>
+            <div className="text-[13px] font-semibold text-nurock-black">
+              Other vendor records have similar names
+            </div>
+            <p className="text-[12px] text-nurock-slate mt-0.5">
+              Multiple records of the same company are allowed when they have different remit addresses or Sage vendor IDs (e.g. different regional offices). If this is the same situation, click <strong>Create anyway</strong>. If one of these is the right record, click <strong>Edit existing</strong>.
+            </p>
+          </div>
+          <ul className="space-y-1.5">
+            {state!.duplicateMatches!.map(m => (
+              <li key={m.id} className="flex items-start justify-between gap-3 text-[12.5px] bg-white rounded-md px-3 py-2 border border-nurock-border">
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-nurock-black flex items-center gap-2">
+                    <span className="truncate">{m.name}</span>
+                    {!m.active && (
+                      <span className="text-[10px] font-medium bg-nurock-slate-light/20 text-nurock-slate px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0">
+                        inactive
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-nurock-slate mt-0.5 space-y-0.5">
+                    <div>
+                      {m.category ?? "—"}
+                      {m.sage_vendor_id && (
+                        <> · Sage ID <span className="font-mono">{m.sage_vendor_id}</span></>
+                      )}
+                    </div>
+                    {m.remit_address && (
+                      <div className="text-nurock-slate-light text-[10.5px] line-clamp-2 whitespace-pre-line">
+                        Remit to: {m.remit_address}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <Link
+                  href={`/admin/vendors/${m.id}/edit`}
+                  className="text-[12px] text-nurock-navy hover:underline whitespace-nowrap shrink-0"
+                >
+                  Edit existing →
+                </Link>
+              </li>
+            ))}
+          </ul>
+          {/* Override — hidden input is only present here, so the next submit
+              from this form carries it. */}
+          <input type="hidden" name="confirm_duplicate" value="true" />
+          <div className="text-[11.5px] text-nurock-slate-light">
+            Submitting again will create the new vendor. The database still blocks records that share both the same name AND Sage vendor ID.
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-3 pt-3 border-t border-nurock-border">
-        <SubmitButton isEdit={isEdit} />
+        <SubmitButton isEdit={isEdit} forceCreateLabel={hasDuplicates && !isEdit} />
         <Link href="/admin/vendors" className="btn-ghost">Cancel</Link>
       </div>
     </form>
@@ -121,11 +196,16 @@ function Field({
   );
 }
 
-function SubmitButton({ isEdit }: { isEdit: boolean }) {
+function SubmitButton({ isEdit, forceCreateLabel }: { isEdit: boolean; forceCreateLabel: boolean }) {
   const { pending } = useFormStatus();
+  const label = pending
+    ? "Saving…"
+    : forceCreateLabel
+      ? "Create anyway"
+      : isEdit ? "Save changes" : "Create vendor";
   return (
     <button type="submit" disabled={pending} className="btn-primary">
-      {pending ? "Saving…" : isEdit ? "Save changes" : "Create vendor"}
+      {label}
     </button>
   );
 }
