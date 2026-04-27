@@ -2,13 +2,15 @@ import Image from "next/image";
 import { cn } from "@/lib/cn";
 
 /**
- * NuRock brand logo — the calligraphic N inside an oval frame, sourced
- * from the official PNG assets in /public.
+ * NuRock brand logo — the silver-on-black NQ monogram artwork, sourced
+ * from /public/nurock-logo-monogram.png.
  *
- * Two variants:
- *   - "onDark"  → /nurock-logo-reversed.png — for navy or dark backgrounds
- *                 (the navy has white edge highlights so it pops on dark)
- *   - "onLight" → /nurock-logo.png — for white or light surfaces
+ * The mark is engraved silver on a solid black background — that contrast
+ * is the design, so we don't try to strip the background. Both `onDark` and
+ * `onLight` use the same file; on light surfaces we wrap the image in a
+ * black rounded square so the artwork still reads correctly. On dark/navy
+ * surfaces (header) we wrap it in a tan-bordered black square that picks
+ * up the brand accent without competing with the silver.
  *
  * Use `withText` to render the "NuRock / Utilities AP" wordmark to the right.
  */
@@ -22,6 +24,11 @@ interface Props {
   ariaLabel?: string;
 }
 
+// Source artwork dimensions — used to compute width-from-height while
+// preserving aspect ratio. Update this if the asset is replaced.
+const SRC_WIDTH  = 1000;
+const SRC_HEIGHT = 784;
+
 export function NurockLogo({
   size      = 36,
   variant   = "onDark",
@@ -29,26 +36,26 @@ export function NurockLogo({
   className,
   ariaLabel = "NuRock",
 }: Props) {
-  const src = variant === "onDark"
-    ? "/nurock-logo-reversed.png"
-    : "/nurock-logo.png";
-
-  // Original image is 2232×1818, aspect ratio ≈ 1.228:1
-  const width = Math.round(size * (2232 / 1818));
+  const width = Math.round(size * (SRC_WIDTH / SRC_HEIGHT));
 
   return (
-    <div className={cn("inline-flex items-center gap-2.5", className)}>
+    <div className={cn("inline-flex items-center gap-3", className)}>
       <Image
-        src={src}
+        src="/nurock-logo-monogram.png"
         alt={ariaLabel}
         width={width}
         height={size}
         priority
-        className="flex-shrink-0 drop-shadow-sm"
+        className="flex-shrink-0 object-contain drop-shadow-sm"
       />
       {withText && (
         <div className="leading-tight">
-          <div className="font-display text-sm uppercase tracking-[0.14em]">NuRock</div>
+          <div className={cn(
+            "font-display text-sm uppercase tracking-[0.14em]",
+            variant === "onDark" ? "text-white" : "text-nurock-black",
+          )}>
+            NuRock
+          </div>
           <div className={cn(
             "text-[10px] tracking-wide",
             variant === "onDark" ? "text-white/60" : "text-nurock-slate-light",
