@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { linkInvoice } from "@/app/(app)/invoices/[id]/link-actions";
 import { Combobox, type ComboboxOption } from "@/components/ui/Combobox";
@@ -8,18 +8,42 @@ import { Combobox, type ComboboxOption } from "@/components/ui/Combobox";
 type Property = { id: string; code: string; name: string; full_code?: string | null };
 type Vendor   = { id: string; name: string };
 type GL       = { id: string; code: string; description: string };
-type UA       = { id: string; account_number: string;
+type UA       = { id: string; account_number: string; property_id: string;
                   property_code: string; property_name: string;
                   vendor_name: string; gl_code: string };
+
+// Same fuzzy-match rules used by the duplicate-vendor detection — keep in sync.
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+function stripTrailingDigits(s: string): string {
+  return s.replace(/\d+$/, "");
+}
+function vendorsLookSame(a: string, b: string): boolean {
+  const na = stripTrailingDigits(normalize(a));
+  const nb = stripTrailingDigits(normalize(b));
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.length >= 3 && nb.includes(na)) return true;
+  if (nb.length >= 3 && na.includes(nb)) return true;
+  if (na.length >= 6 && nb.length >= 6 && na.slice(0, 6) === nb.slice(0, 6)) return true;
+  return false;
+}
 
 /**
  * Linking panel shown when an invoice is in `needs_coding` because extraction
  * succeeded but no utility_account matched the extracted account number.
  *
  * Two tabs:
- *   - "Match existing" — pick a utility_account from the list (filtered by vendor)
+ *   - "Match existing" — pick a utility_account from the list
  *   - "Create new"     — make a new utility_account on the fly so future bills
  *                        with this account number resolve automatically
+ *
+ * Vendor mismatch alert: when the user selects a property in Create New AND
+ * the extracted vendor name doesn't fuzzy-match any vendor that property is
+ * already known to use, we surface a yellow warning showing the property's
+ * actual expected vendors. The user can either pick one of those (typo /
+ * different name for same company) or proceed anyway (legitimate new vendor).
  *
  * After linking, the page refreshes and the invoice transitions to either
  * `ready_for_approval` or `needs_variance_note` depending on variance.
@@ -46,12 +70,44 @@ export function LinkInvoicePanel({
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"existing" | "create">("existing");
 
+  // Track the user's current property selection in Create New — needed for
+  // the vendor-mismatch alert. We pass it to Combobox via the value prop.
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string>("");
+
   // Suggest the matching vendor automatically if there's an obvious name match
-  const suggestedVendorId =
-    vendors.find(v =>
-      extractedVendorName &&
-      v.name.toLowerCase().includes(extractedVendorName.toLowerCase().split(/\s/)[0])
-    )?.id ?? "";
+  const suggestedVendorId = useMemo(
+    () => vendors.find(v =>
+      extractedVendorName && vendorsLookSame(v.name, extractedVendorName)
+    )?.id ?? "",
+    [vendors, extractedVendorName],
+  );
+
+  // Index property → expected vendor names (deduped) for the mismatch alert
+  const expectedVendorsByProperty = useMemo(() => {
+    const m = new Map<string, Array<{ name: string; gl: string }>>();
+    for (const a of utilityAccounts) {
+      if (!a.property_id) continue;
+      const arr = m.get(a.property_id) ?? [];
+      const dup = arr.some(x => x.name === a.vendor_name && x.gl === a.gl_code);
+      if (!dup && a.vendor_name) {
+        arr.push({ name: a.vendor_name, gl: a.gl_code });
+        m.set(a.property_id, arr);
+      }
+    }
+    return m;
+  }, [utilityAccounts]);
+
+  // Mismatch logic: only fires when the user has picked a property AND we have
+  // an extracted vendor name AND none of the property's expected vendors fuzzy-
+  // match. New properties with zero accounts get a different message.
+  const mismatch = useMemo(() => {
+    if (!selectedPropertyId || !extractedVendorName) return null;
+    const expected = expectedVendorsByProperty.get(selectedPropertyId) ?? [];
+    if (expected.length === 0) return { kind: "no-history" as const, expected };
+    const matched = expected.find(e => vendorsLookSame(e.name, extractedVendorName));
+    if (matched) return null;
+    return { kind: "mismatch" as const, expected };
+  }, [selectedPropertyId, extractedVendorName, expectedVendorsByProperty]);
 
   function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -138,6 +194,7 @@ export function LinkInvoicePanel({
                     label:  `${p.full_code ?? p.code} · ${p.name}`,
                     search: `${p.code} ${p.full_code ?? ""} ${p.name}`,
                   }))}
+                  onValueChange={setSelectedPropertyId}
                 />
               </Field>
               <Field label="Vendor" required>
@@ -165,6 +222,45 @@ export function LinkInvoicePanel({
                 />
               </Field>
             </div>
+
+            {/* Vendor mismatch alert — shown when the user picks a property
+                whose existing utility accounts don't include the extracted
+                vendor (or any company that fuzzy-matches it). */}
+            {mismatch && mismatch.kind === "mismatch" && (
+              <div className="rounded-md border-l-4 border-l-flag-amber bg-[#FFF8E8] p-3.5 space-y-2">
+                <div className="flex items-start gap-2">
+                  <svg width="16" height="16" viewBox="0 0 16 16" className="shrink-0 mt-0.5 text-flag-amber-dark" aria-hidden="true">
+                    <path d="M8 1.5l7 13H1l7-13zM8 6v4M8 12v.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[12.5px] font-semibold text-nurock-black">
+                      Vendor doesn't match this property's history
+                    </div>
+                    <p className="text-[12px] text-nurock-slate mt-0.5">
+                      Extraction read <strong>{extractedVendorName}</strong>, but this property's existing utility accounts use:
+                    </p>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                      {mismatch.expected.map(e => (
+                        <span key={`${e.name}-${e.gl}`} className="bg-white border border-nurock-border rounded-full px-2 py-0.5 text-[11.5px] text-nurock-slate">
+                          {e.name} <span className="text-nurock-slate-light">· {e.gl}</span>
+                        </span>
+                      ))}
+                    </div>
+                    <p className="text-[11.5px] text-nurock-slate-light mt-2">
+                      If the extracted vendor name is wrong, fix it via <strong>Edit fields</strong> on the bill above. If this is a legitimately new vendor for this property, continue.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {mismatch && mismatch.kind === "no-history" && (
+              <div className="rounded-md border-l-4 border-l-nurock-slate bg-[#FAFBFC] p-3.5">
+                <div className="text-[12px] text-nurock-slate">
+                  This property has no utility accounts yet. The vendor and GL you choose will be its first.
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="md:col-span-2">
                 <Field label="Account number" required>

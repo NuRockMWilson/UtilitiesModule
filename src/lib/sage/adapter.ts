@@ -29,6 +29,17 @@ export interface SageInvoicePayload {
   description: string;
   service_period_start?: string;
   service_period_end?: string;
+  /**
+   * Optional distribution lines. When absent, the invoice is posted as a
+   * single APD record using `gl_coding` and `amount`. When present, each
+   * row becomes its own APD line (Sage's native multi-distribution shape);
+   * the sum of distributions.amount must equal `amount`.
+   */
+  distributions?: Array<{
+    gl_coding:   string;
+    amount:      number;
+    description: string;
+  }>;
 }
 
 export interface SagePostResult {

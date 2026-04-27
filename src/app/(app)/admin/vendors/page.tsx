@@ -103,7 +103,7 @@ function compareVendors(a: VendorRow, b: VendorRow, key: SortKey): number {
 }
 
 interface PageProps {
-  searchParams: { sort?: string; dir?: string };
+  searchParams: { sort?: string; dir?: string; show?: string };
 }
 
 export default async function AdminVendorsPage({ searchParams }: PageProps) {
@@ -112,7 +112,15 @@ export default async function AdminVendorsPage({ searchParams }: PageProps) {
     .from("vendors")
     .select("id, name, short_name, category, sage_vendor_id, contact_email, remit_address, active");
 
-  const vendors = (data ?? []) as VendorRow[];
+  const allVendors = (data ?? []) as VendorRow[];
+
+  // Active-only by default; ?show=all reveals deactivated rows. Inactive
+  // vendors are hidden from pickers everywhere else, so the natural default
+  // here is to hide them in the admin list too — but keep them reachable
+  // for reactivation when the user explicitly asks.
+  const showAll  = searchParams.show === "all";
+  const vendors  = showAll ? allVendors : allVendors.filter(v => v.active);
+  const inactiveCount = allVendors.filter(v => !v.active).length;
 
   // Resolve sort from URL — default name asc, with active above inactive
   const sortKey: SortKey = VALID_SORTS.has(searchParams.sort as SortKey)
@@ -128,7 +136,8 @@ export default async function AdminVendorsPage({ searchParams }: PageProps) {
     return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
 
-  const clusters = findClusters(vendors);
+  // Cluster against active-only — already correct from prior turn
+  const clusters = findClusters(allVendors.filter(v => v.active));
   const dupTotal = clusters.reduce((sum, c) => sum + c.members.length, 0);
 
   return (
@@ -138,45 +147,77 @@ export default async function AdminVendorsPage({ searchParams }: PageProps) {
 
         {/* Duplicate-cluster banner — only shown when clusters exist. */}
         {clusters.length > 0 && (
-          <div className="card border-l-4 border-l-flag-amber p-5">
-            <div className="flex items-start justify-between gap-4 mb-3">
-              <div>
-                <div className="font-display font-semibold text-nurock-black text-[14px]">
-                  Possible duplicate vendors
+          <details className="card border-l-4 border-l-flag-amber group" open={false}>
+            <summary className="flex items-start justify-between gap-4 p-5 cursor-pointer list-none select-none hover:bg-[#FFFCF1] transition-colors">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  {/* Chevron — rotates when open. Using inline SVG so we don't
+                      pull in a Lucide round-trip just for one glyph. */}
+                  <svg
+                    width="14" height="14" viewBox="0 0 14 14"
+                    aria-hidden="true"
+                    className="shrink-0 text-nurock-slate transition-transform group-open:rotate-90"
+                  >
+                    <path d="M5 3l4 4-4 4" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <div className="font-display font-semibold text-nurock-black text-[14px]">
+                    Possible duplicate vendors
+                  </div>
+                  <span className="text-[10.5px] uppercase tracking-wide bg-flag-amber/15 text-flag-amber-dark border border-flag-amber/40 px-1.5 py-0.5 rounded shrink-0">
+                    {clusters.length} group{clusters.length === 1 ? "" : "s"}
+                  </span>
                 </div>
-                <p className="text-[12.5px] text-nurock-slate mt-0.5">
-                  Found {clusters.length} group{clusters.length === 1 ? "" : "s"} ·{" "}
-                  {dupTotal} vendor{dupTotal === 1 ? "" : "s"} look{dupTotal === 1 ? "s" : ""} similar to another. Pick a canonical record per group, then deactivate the rest.
+                <p className="text-[12.5px] text-nurock-slate mt-0.5 ml-[22px]">
+                  {dupTotal} vendor{dupTotal === 1 ? "" : "s"} look{dupTotal === 1 ? "s" : ""} similar to another. Multiple records of the same company are fine if they bill from different remit offices — review and consolidate the rest.
                 </p>
               </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {clusters.map(c => (
-                <div key={c.key} className="rounded-md border border-nurock-border bg-[#FFF8E8] p-3">
-                  <div className="text-[11px] uppercase tracking-wide text-nurock-slate mb-1.5">
-                    Group · {c.members.length} vendors
+            </summary>
+            <div className="px-5 pb-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {clusters.map(c => (
+                  <div key={c.key} className="rounded-md border border-nurock-border bg-[#FFF8E8] p-3">
+                    <div className="text-[11px] uppercase tracking-wide text-nurock-slate mb-1.5">
+                      Group · {c.members.length} vendors
+                    </div>
+                    <ul className="space-y-1">
+                      {c.members.map(m => (
+                        <li key={m.id} className="flex items-center justify-between gap-3 text-[12.5px]">
+                          <Link href={`/admin/vendors/${m.id}/edit`} className="text-nurock-navy hover:underline truncate">
+                            {m.name}
+                          </Link>
+                          <span className={cn("badge text-[10px] px-1.5 py-0.5 shrink-0", m.active ? "badge-green" : "badge-slate")}>
+                            {m.active ? "active" : "inactive"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <ul className="space-y-1">
-                    {c.members.map(m => (
-                      <li key={m.id} className="flex items-center justify-between gap-3 text-[12.5px]">
-                        <Link href={`/admin/vendors/${m.id}/edit`} className="text-nurock-navy hover:underline truncate">
-                          {m.name}
-                        </Link>
-                        <span className={cn("badge text-[10px] px-1.5 py-0.5 shrink-0", m.active ? "badge-green" : "badge-slate")}>
-                          {m.active ? "active" : "inactive"}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          </details>
         )}
 
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-nurock-slate">
-            {vendors.length} vendors · Sage vendor IDs must be set before a property can post bills to Sage.
+            {vendors.length} {showAll ? "total" : "active"} vendor{vendors.length === 1 ? "" : "s"}
+            {!showAll && inactiveCount > 0 && (
+              <> · <Link
+                href={`/admin/vendors?show=all${sortKey !== "name" || sortDir !== "asc" ? `&sort=${sortKey}&dir=${sortDir}` : ""}`}
+                className="text-nurock-navy hover:underline"
+              >
+                Show {inactiveCount} deactivated
+              </Link></>
+            )}
+            {showAll && (
+              <> · <Link
+                href={`/admin/vendors${sortKey !== "name" || sortDir !== "asc" ? `?sort=${sortKey}&dir=${sortDir}` : ""}`}
+                className="text-nurock-navy hover:underline"
+              >
+                Hide deactivated
+              </Link></>
+            )}
+            {" "}· Sage vendor IDs must be set before a property can post bills to Sage.
           </p>
           <Link href="/admin/vendors/new" className="btn-primary">
             + Add vendor
@@ -186,11 +227,11 @@ export default async function AdminVendorsPage({ searchParams }: PageProps) {
           <table className="min-w-full text-sm">
             <thead>
               <tr>
-                <SortableHeader label="Name"           sortKey="name"           current={sortKey} dir={sortDir} />
-                <SortableHeader label="Category"       sortKey="category"       current={sortKey} dir={sortDir} />
-                <SortableHeader label="Sage vendor ID" sortKey="sage_vendor_id" current={sortKey} dir={sortDir} />
-                <SortableHeader label="Contact"        sortKey="contact"        current={sortKey} dir={sortDir} />
-                <SortableHeader label="Status"         sortKey="status"         current={sortKey} dir={sortDir} />
+                <SortableHeader label="Name"           sortKey="name"           current={sortKey} dir={sortDir} showAll={showAll} />
+                <SortableHeader label="Category"       sortKey="category"       current={sortKey} dir={sortDir} showAll={showAll} />
+                <SortableHeader label="Sage vendor ID" sortKey="sage_vendor_id" current={sortKey} dir={sortDir} showAll={showAll} />
+                <SortableHeader label="Contact"        sortKey="contact"        current={sortKey} dir={sortDir} showAll={showAll} />
+                <SortableHeader label="Status"         sortKey="status"         current={sortKey} dir={sortDir} showAll={showAll} />
                 <th className="cell-head text-right">Actions</th>
               </tr>
             </thead>
@@ -261,13 +302,15 @@ export default async function AdminVendorsPage({ searchParams }: PageProps) {
  * ascending order. Renders an arrow indicator on the active column.
  */
 function SortableHeader({
-  label, sortKey, current, dir,
+  label, sortKey, current, dir, showAll,
 }: {
-  label: string; sortKey: SortKey; current: SortKey; dir: "asc" | "desc";
+  label: string; sortKey: SortKey; current: SortKey; dir: "asc" | "desc"; showAll: boolean;
 }) {
   const isActive = current === sortKey;
   const nextDir = isActive ? (dir === "asc" ? "desc" : "asc") : "asc";
-  const href = `/admin/vendors?sort=${sortKey}&dir=${nextDir}`;
+  const params = new URLSearchParams({ sort: sortKey, dir: nextDir });
+  if (showAll) params.set("show", "all");
+  const href = `/admin/vendors?${params.toString()}`;
   return (
     <th className="cell-head">
       <Link href={href} className="inline-flex items-center gap-1 hover:text-nurock-black">

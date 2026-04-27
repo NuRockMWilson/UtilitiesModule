@@ -123,8 +123,16 @@ export const sage300cre: SageAdapter = {
         "", "", "", "", "", "",
       ]);
 
-      // ---- APD: one distribution per invoice ----
-      const apdRow = formatRow([
+      // ---- APD: one or more distribution rows per invoice ----
+      // Multi-distribution support: when invoice carries `distributions`, emit
+      // one APD record per line. Otherwise fall back to a single APD using
+      // the invoice's primary gl_coding + total amount. Sage processes the
+      // group in order (one API followed by N APD rows = one invoice).
+      const distributions = (inv.distributions && inv.distributions.length > 0)
+        ? inv.distributions
+        : [{ gl_coding: inv.gl_coding, amount: inv.amount, description: inv.description }];
+
+      const apdRows = distributions.map(d => formatRow([
         "APD",
         "",                                         // Subcontract — N/A for utility AP
         "",                                         // Subcontract Line Item
@@ -132,18 +140,18 @@ export const sage300cre: SageAdapter = {
         "",                                         // Extra
         "",                                         // Cost Code — N/A
         "",                                         // Category — N/A
-        alpha(inv.gl_coding,        FIELD_LIMITS.expense_account),
+        alpha(d.gl_coding,           FIELD_LIMITS.expense_account),
         DEFAULT_AP_ACCOUNT,                         // AP Account
-        numeric(inv.amount),
+        numeric(d.amount),
         numeric(0),                                 // Retainage
         "",                                         // 1099 Exempt — let Sage default
         "",                                         // Draw
-        alpha(inv.description,      FIELD_LIMITS.apd_description),
+        alpha(d.description,         FIELD_LIMITS.apd_description),
         "",                                         // Joint Payee
-      ]);
+      ]));
 
       lines.push(apiRow);
-      lines.push(apdRow);
+      for (const apd of apdRows) lines.push(apd);
     }
 
     // CRLF line endings — Sage's importer is Windows-native

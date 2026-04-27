@@ -25,6 +25,8 @@ interface ComboboxProps {
   /** How many filtered results to render at once (perf cap). */
   maxResults?: number;
   className?: string;
+  /** Called when the user picks (or clears) a value. Receives the new value. */
+  onValueChange?: (value: string) => void;
 }
 
 /**
@@ -48,6 +50,7 @@ export function Combobox({
   mono,
   maxResults = 50,
   className = "",
+  onValueChange,
 }: ComboboxProps) {
   const listboxId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -100,6 +103,7 @@ export function Combobox({
     setOpen(false);
     setActiveIdx(0);
     inputRef.current?.blur();
+    onValueChange?.(opt.value);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -121,6 +125,7 @@ export function Combobox({
     } else if (e.key === "Backspace" && !query && selectedValue) {
       // Backspace in empty query clears the selection
       setSelectedValue("");
+      onValueChange?.("");
     }
   }
 
@@ -153,7 +158,7 @@ export function Combobox({
         <button
           type="button"
           aria-label="Clear selection"
-          onMouseDown={e => { e.preventDefault(); setSelectedValue(""); inputRef.current?.focus(); }}
+          onMouseDown={e => { e.preventDefault(); setSelectedValue(""); onValueChange?.(""); inputRef.current?.focus(); }}
           className="absolute right-2 top-1/2 -translate-y-1/2 text-nurock-slate-light hover:text-nurock-black text-[14px]"
         >
           ×

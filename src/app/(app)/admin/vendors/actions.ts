@@ -67,6 +67,10 @@ async function findSimilarVendors(name: string, excludeId: string | null): Promi
   const matches: VendorMatch[] = [];
   for (const v of (all ?? [])) {
     if (excludeId && v.id === excludeId) continue;
+    // Inactive vendors are intentionally excluded — they're already hidden
+    // from pickers, and surfacing them as "duplicates" of a name being
+    // created fresh would just be noise.
+    if (!v.active) continue;
     const candidate = stripTrailingDigits(normalizeVendorName(v.name));
     if (!candidate) continue;
 

@@ -10,6 +10,8 @@ import { ApprovalPanel } from "@/components/invoices/ApprovalPanel";
 import { VarianceExplanationForm } from "@/components/invoices/VarianceExplanationForm";
 import { LinkInvoicePanel } from "@/components/invoices/LinkInvoicePanel";
 import { DeleteInvoiceButton } from "@/components/invoices/DeleteInvoiceButton";
+import { EditableBillDetails, type EditableInvoice } from "@/components/invoices/EditableBillDetails";
+import { DistributionsPanel, type DistributionLine } from "@/components/invoices/DistributionsPanel";
 
 export default async function InvoiceDetailPage({ params }: { params: { id: string } }) {
   const supabase = createSupabaseServerClient();
@@ -45,6 +47,30 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
     .eq("invoice_id", params.id)
     .order("sent_at", { ascending: false });
 
+  // Distribution lines + the active GL list for the editor combobox.
+  const [{ data: lineRows }, { data: glAccountsForEditor }] = await Promise.all([
+    supabase.from("invoice_line_items")
+      .select(`
+        id, gl_account_id, sub_code, description, amount,
+        gl:gl_accounts(code, description)
+      `)
+      .eq("invoice_id", params.id)
+      .order("amount", { ascending: false }),
+    supabase.from("gl_accounts")
+      .select("id, code, description")
+      .eq("active", true)
+      .order("code"),
+  ]);
+  const distributionLines: DistributionLine[] = (lineRows ?? []).map((l: any) => ({
+    id:             l.id,
+    gl_account_id:  l.gl_account_id,
+    sub_code:       l.sub_code ?? "00",
+    description:    l.description ?? "",
+    amount:         Number(l.amount),
+    gl_code:        l.gl?.code ?? null,
+    gl_description: l.gl?.description ?? null,
+  }));
+
   const threshold = (invoice.utility_account as any)?.variance_threshold_pct ?? 3;
   const flag = varianceFlag(
     {
@@ -77,7 +103,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
       supabase.from("gl_accounts").select("id, code, description").eq("active", true).order("code"),
       supabase.from("utility_accounts")
         .select(`
-          id, account_number,
+          id, account_number, property_id,
           property:properties(code, name),
           vendor:vendors(name),
           gl:gl_accounts(code)
@@ -93,6 +119,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
       utilityAccounts: (uaRaw ?? []).map((a: any) => ({
         id:             a.id,
         account_number: a.account_number,
+        property_id:    a.property_id,
         property_code:  a.property?.code ?? "",
         property_name:  a.property?.name ?? "",
         vendor_name:    a.vendor?.name ?? "",
@@ -157,62 +184,44 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
         {/* Right: fields, variance, approval */}
         <div className="space-y-6">
           {/*
-            Render bill details. When auto-linking to a utility_account fails,
-            invoice.vendor and invoice.utility_account joins return empty —
-            but the LLM-extracted vendor name and account number are still in
-            raw_extraction. Fall back to those so the page actually shows
-            what was extracted, with an "(unlinked)" hint to make it clear
-            the bill still needs to be attached to an account.
+            Bill details — editable when the invoice is in any pre-approval
+            state. Falls back to raw extraction values when FK joins are
+            empty so the page reflects what was extracted even before
+            linking succeeds. Edits are recorded in approval_log.
           */}
-          <div className="card p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-display text-base font-semibold text-nurock-black">Bill details</h3>
-              <StatusPill status={invoice.status as InvoiceStatus} />
-            </div>
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-              <Field
-                label="Vendor"
-                value={
-                  (invoice.vendor as any)?.name
-                  ?? (invoice.raw_extraction as any)?.vendor_name
-                }
-                hint={
-                  !(invoice.vendor as any)?.name && (invoice.raw_extraction as any)?.vendor_name
-                    ? "extracted; not yet linked to a vendor record"
-                    : undefined
-                }
-              />
-              <Field
-                label="Account #"
-                value={
-                  (invoice.utility_account as any)?.account_number
-                  ?? (invoice.raw_extraction as any)?.account_number
-                }
-                mono
-                hint={
-                  !(invoice.utility_account as any)?.account_number && (invoice.raw_extraction as any)?.account_number
-                    ? "extracted; not yet linked to a utility account"
-                    : undefined
-                }
-              />
-              <Field label="Invoice #"       value={invoice.invoice_number ?? (invoice.raw_extraction as any)?.invoice_number} mono />
-              <Field label="Invoice date"    value={formatDate(invoice.invoice_date ?? (invoice.raw_extraction as any)?.invoice_date)} />
-              <Field label="Service period"  value={
-                invoice.service_period_start && invoice.service_period_end
-                  ? `${formatDate(invoice.service_period_start)} – ${formatDate(invoice.service_period_end)}`
-                  : (invoice.raw_extraction as any)?.service_period_start && (invoice.raw_extraction as any)?.service_period_end
-                    ? `${formatDate((invoice.raw_extraction as any).service_period_start)} – ${formatDate((invoice.raw_extraction as any).service_period_end)}`
-                    : "—"
-              } />
-              <Field label="Service days"    value={formatDays(invoice.service_days ?? (invoice.raw_extraction as any)?.service_days)} />
-              <Field label="Current charges" value={formatDollars(invoice.current_charges)} />
-              <Field label="Adjustments"     value={formatDollars(invoice.adjustments)} />
-              <Field label="Late fees"       value={formatDollars(invoice.late_fees)} />
-              <Field label="Total due"       value={formatDollars(invoice.total_amount_due)} emphasis />
-              <Field label="Due date"        value={formatDate(invoice.due_date ?? (invoice.raw_extraction as any)?.due_date)} />
-              <Field label="GL coding"       value={invoice.gl_coding} mono emphasis />
-            </dl>
-          </div>
+          <EditableBillDetails
+            invoice={{
+              id:                     invoice.id,
+              status:                 invoice.status as InvoiceStatus,
+              invoice_number:         invoice.invoice_number,
+              invoice_date:           invoice.invoice_date,
+              due_date:               invoice.due_date,
+              service_period_start:   invoice.service_period_start,
+              service_period_end:     invoice.service_period_end,
+              service_days:           invoice.service_days,
+              current_charges:        invoice.current_charges,
+              adjustments:            invoice.adjustments,
+              late_fees:              invoice.late_fees,
+              total_amount_due:       invoice.total_amount_due,
+              gl_coding:              invoice.gl_coding,
+              raw_extraction:         invoice.raw_extraction,
+              vendor_name:            (invoice.vendor as any)?.name ?? null,
+              utility_account_number: (invoice.utility_account as any)?.account_number ?? null,
+              fields_edited:          (logEntries ?? []).some((e: any) => e.action === "fields_edited"),
+            } satisfies EditableInvoice}
+          />
+
+          <DistributionsPanel
+            invoiceId={invoice.id}
+            invoiceTotal={invoice.total_amount_due}
+            initial={distributionLines}
+            glAccounts={(glAccountsForEditor ?? []) as Array<{ id: string; code: string; description: string }>}
+            canEdit={[
+              "new", "extracting", "extraction_failed",
+              "needs_coding", "needs_variance_note",
+              "ready_for_approval", "rejected",
+            ].includes(invoice.status as string)}
+          />
 
           {usageReadings && usageReadings.length > 0 && (
             <div className="card p-5">
