@@ -9,6 +9,7 @@ import type { InvoiceStatus } from "@/lib/types";
 import { ApprovalPanel } from "@/components/invoices/ApprovalPanel";
 import { VarianceExplanationForm } from "@/components/invoices/VarianceExplanationForm";
 import { LinkInvoicePanel } from "@/components/invoices/LinkInvoicePanel";
+import { DeleteInvoiceButton } from "@/components/invoices/DeleteInvoiceButton";
 
 export default async function InvoiceDetailPage({ params }: { params: { id: string } }) {
   const supabase = createSupabaseServerClient();
@@ -362,10 +363,11 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
         </div>
       </div>
 
-      <div className="px-8 pb-8">
+      <div className="px-8 pb-8 flex items-center justify-between gap-4">
         <Link href="/invoices" className="text-sm text-nurock-navy hover:underline">
           ← Back to invoices
         </Link>
+        <DeleteInvoiceButton invoiceId={invoice.id} />
       </div>
     </>
   );

@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { linkInvoice } from "@/app/(app)/invoices/[id]/link-actions";
+import { Combobox, type ComboboxOption } from "@/components/ui/Combobox";
 
 type Property = { id: string; code: string; name: string; full_code?: string | null };
 type Vendor   = { id: string; name: string };
@@ -110,43 +111,58 @@ export function LinkInvoicePanel({
       <form onSubmit={submit} className="space-y-4">
         {tab === "existing" ? (
           <Field label="Utility account">
-            <select name="utility_account_id" required className="input">
-              <option value="">— select —</option>
-              {utilityAccounts.map(a => (
-                <option key={a.id} value={a.id}>
-                  {a.property_code} · {a.vendor_name} · {a.gl_code} · {a.account_number}
-                </option>
-              ))}
-            </select>
+            <Combobox
+              name="utility_account_id"
+              required
+              mono
+              placeholder="Type property code, vendor, GL, or account number…"
+              options={utilityAccounts.map((a): ComboboxOption => ({
+                value:  a.id,
+                label:  `${a.property_code} · ${a.vendor_name} · ${a.gl_code} · ${a.account_number}`,
+                detail: a.property_name,
+                // Make every relevant field searchable
+                search: `${a.property_code} ${a.property_name} ${a.vendor_name} ${a.gl_code} ${a.account_number}`,
+              }))}
+            />
           </Field>
         ) : (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <Field label="Property" required>
-                <select name="property_id" required className="input">
-                  <option value="">— select —</option>
-                  {properties.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.full_code ?? p.code} · {p.name}
-                    </option>
-                  ))}
-                </select>
+                <Combobox
+                  name="property_id"
+                  required
+                  placeholder="Type code or name…"
+                  options={properties.map((p): ComboboxOption => ({
+                    value:  p.id,
+                    label:  `${p.full_code ?? p.code} · ${p.name}`,
+                    search: `${p.code} ${p.full_code ?? ""} ${p.name}`,
+                  }))}
+                />
               </Field>
               <Field label="Vendor" required>
-                <select name="vendor_id" defaultValue={suggestedVendorId} required className="input">
-                  <option value="">— select —</option>
-                  {vendors.map(v => (
-                    <option key={v.id} value={v.id}>{v.name}</option>
-                  ))}
-                </select>
+                <Combobox
+                  name="vendor_id"
+                  required
+                  defaultValue={suggestedVendorId}
+                  placeholder="Type vendor name…"
+                  options={vendors.map((v): ComboboxOption => ({
+                    value: v.id,
+                    label: v.name,
+                  }))}
+                />
               </Field>
               <Field label="GL account" required>
-                <select name="gl_account_id" required className="input">
-                  <option value="">— select —</option>
-                  {glAccounts.map(g => (
-                    <option key={g.id} value={g.id}>{g.code} · {g.description}</option>
-                  ))}
-                </select>
+                <Combobox
+                  name="gl_account_id"
+                  required
+                  placeholder="Type GL code or description…"
+                  options={glAccounts.map((g): ComboboxOption => ({
+                    value:  g.id,
+                    label:  `${g.code} · ${g.description}`,
+                    search: `${g.code} ${g.description}`,
+                  }))}
+                />
               </Field>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

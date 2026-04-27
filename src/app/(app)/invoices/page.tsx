@@ -1,10 +1,9 @@
 import Link from "next/link";
 import { TopBar } from "@/components/layout/TopBar";
-import { StatusPill } from "@/components/ui/StatusPill";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { formatDollars, formatDate, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import type { InvoiceStatus } from "@/lib/types";
+import { InvoicesTable, type InvoiceRow } from "@/components/invoices/InvoicesTable";
 
 interface Props {
   searchParams: { status?: string; property?: string; propertyId?: string; flagged?: string; due?: string };
@@ -95,66 +94,22 @@ export default async function InvoicesPage({ searchParams }: Props) {
             Failed to load invoices: {error.message}
           </div>
         )}
-        <div className="card overflow-hidden">
-          <table className="min-w-full divide-y divide-nurock-border text-sm">
-            <thead className="bg-[#FAFBFC]">
-              <tr className="text-left text-xs uppercase tracking-wide text-nurock-slate">
-                <th className="px-4 py-3 font-medium">Property</th>
-                <th className="px-4 py-3 font-medium">Vendor</th>
-                <th className="px-4 py-3 font-medium">Invoice</th>
-                <th className="px-4 py-3 font-medium">Service period</th>
-                <th className="px-4 py-3 font-medium text-right">Amount</th>
-                <th className="px-4 py-3 font-medium text-right">Variance</th>
-                <th className="px-4 py-3 font-medium">GL coding</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium text-right">Due</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-nurock-border">
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-nurock-slate">
-                    No invoices match the current filter.
-                  </td>
-                </tr>
-              )}
-              {rows.map((r: any) => (
-                <tr key={r.id} className="hover:bg-[#FAFBFC]">
-                  <td className="px-4 py-3">
-                    <Link href={`/invoices/${r.id}`} className="font-medium text-nurock-black hover:underline">
-                      {r.property?.code ?? "—"}
-                    </Link>
-                    <div className="text-xs text-nurock-slate truncate max-w-[160px]">
-                      {r.property?.name ?? ""}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">{r.vendor?.name ?? "—"}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{r.invoice_number ?? "—"}</td>
-                  <td className="px-4 py-3 text-xs">
-                    {formatDate(r.invoice_date)}
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums">
-                    {formatDollars(r.total_amount_due)}
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums">
-                    {r.variance_pct !== null ? (
-                      <span className={cn(
-                        r.variance_flagged ? "text-flag-red font-medium" : "text-nurock-slate",
-                      )}>
-                        {formatPercent(r.variance_pct, { sign: true })}
-                      </span>
-                    ) : (
-                      <span className="text-nurock-slate-light">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-nurock-slate">{r.gl_coding ?? "—"}</td>
-                  <td className="px-4 py-3"><StatusPill status={r.status as InvoiceStatus} /></td>
-                  <td className="px-4 py-3 text-right text-xs">{formatDate(r.due_date)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <InvoicesTable
+          rows={rows.map((r: any): InvoiceRow => ({
+            id:                r.id,
+            invoice_number:    r.invoice_number,
+            invoice_date:      r.invoice_date,
+            due_date:          r.due_date,
+            total_amount_due:  r.total_amount_due,
+            status:            r.status,
+            variance_flagged:  r.variance_flagged,
+            variance_pct:      r.variance_pct,
+            gl_coding:         r.gl_coding,
+            property_code:     r.property?.code  ?? null,
+            property_name:     r.property?.name  ?? null,
+            vendor_name:       r.vendor?.name    ?? null,
+          }))}
+        />
       </div>
     </>
   );
