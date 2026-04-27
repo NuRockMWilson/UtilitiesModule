@@ -63,8 +63,8 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
   return (
     <>
       <TopBar
-        title={`Invoice ${invoice.invoice_number ?? "—"}`}
-        subtitle={`${(invoice.property as any)?.name ?? "Unknown property"} · ${(invoice.vendor as any)?.name ?? "Unknown vendor"}`}
+        title={`Invoice ${invoice.invoice_number ?? (invoice.raw_extraction as any)?.invoice_number ?? "—"}`}
+        subtitle={`${(invoice.property as any)?.name ?? "Unknown property"} · ${(invoice.vendor as any)?.name ?? (invoice.raw_extraction as any)?.vendor_name ?? "Unknown vendor"}`}
       />
 
       <div className="p-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -94,31 +94,81 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
               </div>
             </div>
           )}
+
+          {/*
+            Raw extraction JSON — collapsed by default. Surfacing this on every
+            invoice page (rather than hiding it in Supabase) is essential when
+            debugging extraction quality issues: you can see exactly what the
+            LLM returned vs. what got persisted to the row.
+          */}
+          {invoice.raw_extraction && (
+            <details className="card p-4">
+              <summary className="cursor-pointer text-xs uppercase tracking-wide text-nurock-slate select-none">
+                Raw extraction (Claude output)
+              </summary>
+              <pre className="mt-3 bg-[#FAFBFC] border border-nurock-border rounded-md p-3 text-[11px] font-mono whitespace-pre-wrap break-words overflow-x-auto max-h-[400px]">
+                {JSON.stringify(invoice.raw_extraction, null, 2)}
+              </pre>
+            </details>
+          )}
         </div>
 
         {/* Right: fields, variance, approval */}
         <div className="space-y-6">
+          {/*
+            Render bill details. When auto-linking to a utility_account fails,
+            invoice.vendor and invoice.utility_account joins return empty —
+            but the LLM-extracted vendor name and account number are still in
+            raw_extraction. Fall back to those so the page actually shows
+            what was extracted, with an "(unlinked)" hint to make it clear
+            the bill still needs to be attached to an account.
+          */}
           <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-display text-base font-semibold text-nurock-black">Bill details</h3>
               <StatusPill status={invoice.status as InvoiceStatus} />
             </div>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-              <Field label="Vendor"          value={(invoice.vendor as any)?.name} />
-              <Field label="Account #"       value={(invoice.utility_account as any)?.account_number} mono />
-              <Field label="Invoice #"       value={invoice.invoice_number} mono />
-              <Field label="Invoice date"    value={formatDate(invoice.invoice_date)} />
+              <Field
+                label="Vendor"
+                value={
+                  (invoice.vendor as any)?.name
+                  ?? (invoice.raw_extraction as any)?.vendor_name
+                }
+                hint={
+                  !(invoice.vendor as any)?.name && (invoice.raw_extraction as any)?.vendor_name
+                    ? "extracted; not yet linked to a vendor record"
+                    : undefined
+                }
+              />
+              <Field
+                label="Account #"
+                value={
+                  (invoice.utility_account as any)?.account_number
+                  ?? (invoice.raw_extraction as any)?.account_number
+                }
+                mono
+                hint={
+                  !(invoice.utility_account as any)?.account_number && (invoice.raw_extraction as any)?.account_number
+                    ? "extracted; not yet linked to a utility account"
+                    : undefined
+                }
+              />
+              <Field label="Invoice #"       value={invoice.invoice_number ?? (invoice.raw_extraction as any)?.invoice_number} mono />
+              <Field label="Invoice date"    value={formatDate(invoice.invoice_date ?? (invoice.raw_extraction as any)?.invoice_date)} />
               <Field label="Service period"  value={
                 invoice.service_period_start && invoice.service_period_end
                   ? `${formatDate(invoice.service_period_start)} – ${formatDate(invoice.service_period_end)}`
-                  : "—"
+                  : (invoice.raw_extraction as any)?.service_period_start && (invoice.raw_extraction as any)?.service_period_end
+                    ? `${formatDate((invoice.raw_extraction as any).service_period_start)} – ${formatDate((invoice.raw_extraction as any).service_period_end)}`
+                    : "—"
               } />
-              <Field label="Service days"    value={formatDays(invoice.service_days)} />
+              <Field label="Service days"    value={formatDays(invoice.service_days ?? (invoice.raw_extraction as any)?.service_days)} />
               <Field label="Current charges" value={formatDollars(invoice.current_charges)} />
               <Field label="Adjustments"     value={formatDollars(invoice.adjustments)} />
               <Field label="Late fees"       value={formatDollars(invoice.late_fees)} />
               <Field label="Total due"       value={formatDollars(invoice.total_amount_due)} emphasis />
-              <Field label="Due date"        value={formatDate(invoice.due_date)} />
+              <Field label="Due date"        value={formatDate(invoice.due_date ?? (invoice.raw_extraction as any)?.due_date)} />
               <Field label="GL coding"       value={invoice.gl_coding} mono emphasis />
             </dl>
           </div>
@@ -270,14 +320,17 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
 }
 
 function Field({
-  label, value, mono, emphasis,
-}: { label: string; value: string | null | undefined; mono?: boolean; emphasis?: boolean }) {
+  label, value, hint, mono, emphasis,
+}: { label: string; value: string | null | undefined; hint?: string; mono?: boolean; emphasis?: boolean }) {
   return (
     <div>
       <dt className="text-xs uppercase tracking-wide text-nurock-slate">{label}</dt>
       <dd className={`mt-0.5 ${emphasis ? "font-semibold text-nurock-black" : "text-ink"} ${mono ? "font-mono text-sm" : ""}`}>
         {value ?? "—"}
       </dd>
+      {hint && (
+        <div className="text-[10.5px] text-flag-amber italic mt-0.5">{hint}</div>
+      )}
     </div>
   );
 }

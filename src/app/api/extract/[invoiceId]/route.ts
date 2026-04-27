@@ -165,6 +165,23 @@ export async function POST(_: Request, { params }: { params: { invoiceId: string
     nextStatus = "needs_coding"; // surface for human pass
   }
 
+  // For AP tracking we care about the CURRENT month's charges, not the
+  // post-credit "Total Due" line. When a bill shows a credit balance (e.g.
+  // Republic Services with prior-period overpayment), `total_amount_due`
+  // can be negative or zero — but we still want to track this month's
+  // $X of trash service against the property's GL.
+  //
+  // Heuristic: if current_charges is positive but total_amount_due is
+  // less than current_charges, the difference is a credit applied; the
+  // AP total is the current charges. If current_charges itself is null,
+  // fall back to whatever total_amount_due says.
+  const apTotal =
+    typeof extracted.current_charges === "number" && extracted.current_charges > 0
+    && (extracted.total_amount_due === null || extracted.total_amount_due === undefined
+        || extracted.total_amount_due < extracted.current_charges)
+      ? extracted.current_charges
+      : extracted.total_amount_due;
+
   const { error: updErr } = await supabase
     .from("invoices")
     .update({
@@ -183,7 +200,7 @@ export async function POST(_: Request, { params }: { params: { invoiceId: string
       previous_balance: extracted.previous_balance ?? 0,
       adjustments: extracted.adjustments ?? 0,
       late_fees: extracted.late_fees ?? 0,
-      total_amount_due: extracted.total_amount_due,
+      total_amount_due: apTotal,
       gl_coding: glCoding,
       raw_extraction: extracted,
       extraction_confidence: extracted.extraction_confidence,
