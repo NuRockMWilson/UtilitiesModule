@@ -74,15 +74,48 @@ export type ExtractedBillT = z.infer<typeof ExtractedBill>;
 
 const SYSTEM_PROMPT = `You are extracting billing data from utility bills for an affordable-housing property manager. Bills come from water, sewer, electric, gas, trash, cable, phone, and courier vendors. Each bill has the same core shape: vendor + account + service period + charges + total due.
 
-Respond with JSON only, matching the schema provided. Rules:
-- Dates in YYYY-MM-DD. Use null if a date is not stated.
-- Amounts are signed numbers (credits negative, charges positive). No currency symbols. No thousands separators.
-- line_items: one row per visible charge line on the face of the bill. Include storm water, environmental protection, taxes, and fees as separate line items — do not bundle them.
-- usage_readings: populate for water and electric bills. Include every meter shown.
-- reconciliation_check.line_items_sum is the sum of all line_items.amount plus any adjustments, previous balance, and late fees. matches_total is true iff this equals total_amount_due within $0.02.
-- Set extraction_confidence in [0,1]. Below 0.85 triggers human review. Downgrade confidence for: faded scans, multiple conflicting totals, handwritten amounts, unusual bill layouts.
-- Add a warning string for anything ambiguous, especially: partial payments, budget billing, bill consolidation across multiple accounts, rate changes announced on the bill.
-- If the document is NOT a utility bill (e.g., a notice, a letter, a legal demand), return nulls across the board, extraction_confidence=0, and a warning explaining what the document is.`;
+Respond with a single JSON object — no markdown, no prose, no code fences — matching this exact shape and field names:
+
+{
+  "vendor_name":           string | null,   // Company billing the customer (e.g. "Republic Services", "Georgia Power", "AT&T", "Comcast Business")
+  "account_number":        string | null,   // The customer's account number AT THE VENDOR (NOT the invoice number). Often labeled "Account Number", "Customer ID", "Service Number"
+  "invoice_number":        string | null,   // The bill's unique invoice/statement number (NOT the account number). Labeled "Invoice Number", "Statement Number", "Bill Number"
+  "invoice_date":          string | null,   // YYYY-MM-DD; the date the bill was issued / statement date
+  "due_date":              string | null,   // YYYY-MM-DD; payment due date. If "Do Not Pay" or credit balance, set null
+  "service_period_start":  string | null,   // YYYY-MM-DD; first day of the billing period
+  "service_period_end":    string | null,   // YYYY-MM-DD; last day of the billing period
+  "service_days":          number | null,   // Number of days in the billing period (or null if not derivable)
+  "service_address":       string | null,   // Where the service is delivered (the property's address as printed on the bill)
+  "remit_address":         string | null,   // Where to mail the payment ("Make Checks Payable To" / "Remit To" address)
+  "line_items": [                            // Every visible charge line on the bill — one row each. Include taxes & fees separately.
+    { "description": string, "amount": number, "quantity": number | null, "unit": string | null }
+  ],
+  "usage_readings": [                        // For water/electric/gas — every meter. Empty array for trash/phone/etc.
+    { "reading_type": "water"|"sewer"|"irrigation"|"electric"|"gas"|null, "meter_start": number | null, "meter_end": number | null, "usage_amount": number | null, "usage_unit": string | null }
+  ],
+  "previous_balance":  number | null,        // Carried-forward balance from prior period. NEGATIVE if a credit balance.
+  "current_charges":   number | null,        // THIS billing period's charges only. Always positive on a real utility bill.
+  "adjustments":       number | null,        // Net adjustments / payments / credits applied THIS period (typically 0 or negative)
+  "late_fees":         number | null,        // Late-payment penalties on the bill (typically 0)
+  "total_amount_due":  number | null,        // The bill's headline "Total Due" or "Total Amount Due" line. Can be negative if account is in credit. If "Do Not Pay", set the actual signed total still.
+  "reconciliation_check": {
+    "line_items_sum": number | null,         // Sum of line_items.amount values
+    "matches_total":  boolean,                // True iff line_items_sum + previous_balance + adjustments + late_fees == total_amount_due within $0.02
+    "delta":          number | null           // Computed delta if reconciliation fails; null if matches
+  },
+  "extraction_confidence": number,           // 0.0 to 1.0. Below 0.85 triggers human review.
+  "warnings": [string]                       // One string per noteworthy ambiguity
+}
+
+Critical rules:
+- ALWAYS use the EXACT field names above. Do not rename "vendor_name" → "vendor", "account_number" → "account", "invoice_number" → "invoice_no", or invent new top-level keys.
+- Dates ALWAYS in YYYY-MM-DD. Use null if not stated.
+- Amounts are unsigned-or-signed numbers WITHOUT currency symbols, WITHOUT commas, WITHOUT trailing "CR". A "$5,369.08CR" credit balance is the number -5369.08.
+- account_number ≠ invoice_number. They are usually two different fields printed near each other on the bill.
+- Multi-page rolled-up bills (e.g. utility bills with 14 sub-accounts on consecutive pages): extract data from PAGE ONE only — that page's account number, total, etc. The system processes one PDF = one invoice today.
+- Downgrade extraction_confidence for: faded/scanned bills with OCR noise, multiple conflicting totals, handwritten amounts, unusual layouts.
+- Add a warning string for: credit balances, partial payments, budget billing, bill consolidation across multiple accounts, rate changes announced on the bill.
+- If the document is NOT a utility bill (notice letter, legal demand, advertising), return all nullable fields as null, extraction_confidence=0, and a warning explaining what the document is.`;
 
 /**
  * Supported input shapes for extraction.

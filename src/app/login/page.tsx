@@ -35,7 +35,16 @@ export default function LoginPage() {
 
     setLoading(false);
     if (error) {
-      setErr(error.message);
+      // Supabase returns "Signups not allowed for otp" when the email isn't
+      // already a user. The dashboard is invite-only; show a friendlier message.
+      if (/signups not allowed/i.test(error.message)) {
+        setErr(
+          `${email} is not authorized to sign in. The NuRock Utilities AP dashboard ` +
+          `is invite-only — ask an admin to add your account in Supabase before signing in.`,
+        );
+      } else {
+        setErr(error.message);
+      }
     } else {
       setStage("code");
     }
