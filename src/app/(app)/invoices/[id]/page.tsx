@@ -8,6 +8,7 @@ import { varianceFlag } from "@/lib/variance";
 import type { InvoiceStatus } from "@/lib/types";
 import { ApprovalPanel } from "@/components/invoices/ApprovalPanel";
 import { VarianceExplanationForm } from "@/components/invoices/VarianceExplanationForm";
+import { LinkInvoicePanel } from "@/components/invoices/LinkInvoicePanel";
 
 export default async function InvoiceDetailPage({ params }: { params: { id: string } }) {
   const supabase = createSupabaseServerClient();
@@ -59,6 +60,45 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
   const pdfUrl = invoice.pdf_path
     ? (await supabase.storage.from("invoices").createSignedUrl(invoice.pdf_path, 3600)).data?.signedUrl
     : null;
+
+  // When the invoice is unlinked (extraction succeeded but no utility_account
+  // matched), load the dropdown data needed by LinkInvoicePanel. We only do
+  // this query when the panel will actually render to avoid the cost on
+  // already-linked invoices.
+  const needsLinking = !invoice.utility_account_id;
+  let linkData: {
+    properties: any[]; vendors: any[]; glAccounts: any[]; utilityAccounts: any[];
+  } | null = null;
+  if (needsLinking) {
+    const [{ data: properties }, { data: vendors }, { data: glAccounts }, { data: uaRaw }] = await Promise.all([
+      supabase.from("properties").select("id, code, name, full_code").eq("active", true).order("code"),
+      supabase.from("vendors").select("id, name").eq("active", true).order("name"),
+      supabase.from("gl_accounts").select("id, code, description").eq("active", true).order("code"),
+      supabase.from("utility_accounts")
+        .select(`
+          id, account_number,
+          property:properties(code, name),
+          vendor:vendors(name),
+          gl:gl_accounts(code)
+        `)
+        .eq("active", true)
+        .order("account_number")
+        .limit(2000),
+    ]);
+    linkData = {
+      properties: properties ?? [],
+      vendors:    vendors    ?? [],
+      glAccounts: glAccounts ?? [],
+      utilityAccounts: (uaRaw ?? []).map((a: any) => ({
+        id:             a.id,
+        account_number: a.account_number,
+        property_code:  a.property?.code ?? "",
+        property_name:  a.property?.name ?? "",
+        vendor_name:    a.vendor?.name ?? "",
+        gl_code:        a.gl?.code ?? "",
+      })),
+    };
+  }
 
   return (
     <>
@@ -245,6 +285,18 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
               </div>
             )}
           </div>
+
+          {needsLinking && linkData && (
+            <LinkInvoicePanel
+              invoiceId={invoice.id}
+              extractedVendorName={(invoice.raw_extraction as any)?.vendor_name ?? null}
+              extractedAccountNumber={(invoice.raw_extraction as any)?.account_number ?? null}
+              properties={linkData.properties}
+              vendors={linkData.vendors}
+              glAccounts={linkData.glAccounts}
+              utilityAccounts={linkData.utilityAccounts}
+            />
+          )}
 
           <ApprovalPanel
             invoiceId={invoice.id}
