@@ -34,9 +34,9 @@ export default async function AdminBudgetsPage({
       <div className="p-8">
         <div className="mb-4 flex items-center justify-between">
           <p className="text-sm text-nurock-slate">
-            Budgets power the Variance % column on property trackers. Enter monthly values via Supabase (bulk import supported) or upload a CSV — upload UI coming next phase.
+            Budgets power the Variance % column on property trackers. Upload a CSV or load values directly via Supabase.
           </p>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             {[year, year - 1, year + 1].sort().map(y => (
               <Link
                 key={y}
@@ -46,6 +46,9 @@ export default async function AdminBudgetsPage({
                 {y}
               </Link>
             ))}
+            <Link href="/admin/budgets/upload" className="btn-primary ml-2">
+              + Upload CSV
+            </Link>
           </div>
         </div>
         <div className="card overflow-hidden">

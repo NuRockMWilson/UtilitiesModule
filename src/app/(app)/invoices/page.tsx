@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import type { InvoiceStatus } from "@/lib/types";
 
 interface Props {
-  searchParams: { status?: string; property?: string; flagged?: string; due?: string };
+  searchParams: { status?: string; property?: string; propertyId?: string; flagged?: string; due?: string };
 }
 
 const STATUS_FILTERS: Array<{ value: string; label: string }> = [
@@ -37,7 +37,8 @@ export default async function InvoicesPage({ searchParams }: Props) {
     .limit(200);
 
   if (searchParams.status) query = query.eq("status", searchParams.status as InvoiceStatus);
-  if (searchParams.property) query = query.eq("property_id", searchParams.property);
+  const propertyFilter = searchParams.propertyId ?? searchParams.property;
+  if (propertyFilter) query = query.eq("property_id", propertyFilter);
   if (searchParams.flagged === "true") query = query.eq("variance_flagged", true);
   if (searchParams.due === "soon") {
     const threeDays = new Date();

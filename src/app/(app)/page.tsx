@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { formatDollars, formatNumber } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import type { InvoiceStatus } from "@/lib/types";
+import { DashboardPropertyPicker } from "@/components/dashboard/DashboardPropertyPicker";
 
 interface StatusCount {
   status: InvoiceStatus;
@@ -11,13 +12,16 @@ interface StatusCount {
   amount: number;
 }
 
-async function loadDashboard() {
+async function loadDashboard(propertyId: string | null) {
   const supabase = createSupabaseServerClient();
 
-  const { data: invoices } = await supabase
+  let q = supabase
     .from("invoices")
-    .select("status, total_amount_due, variance_flagged, due_date")
+    .select("status, total_amount_due, variance_flagged, due_date, property_id")
     .not("status", "in", "(paid,rejected)");
+  if (propertyId) q = q.eq("property_id", propertyId);
+
+  const { data: invoices } = await q;
 
   const rows = invoices ?? [];
   const byStatus = new Map<InvoiceStatus, StatusCount>();
@@ -57,13 +61,43 @@ const TILE_ORDER: InvoiceStatus[] = [
   "ready_for_approval", "approved", "posted_to_sage",
 ];
 
-export default async function DashboardPage() {
-  const { statusCounts, flagged, dueSoon, dueSoonAmount } = await loadDashboard();
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: { propertyId?: string };
+}) {
+  const supabase = createSupabaseServerClient();
+  const { data: properties } = await supabase
+    .from("properties")
+    .select("id, code, name, full_code")
+    .eq("active", true)
+    .order("code");
+
+  const propertyId = searchParams.propertyId ?? null;
+  const scopedProperty = propertyId
+    ? (properties ?? []).find(p => p.id === propertyId) ?? null
+    : null;
+
+  const { statusCounts, flagged, dueSoon, dueSoonAmount } = await loadDashboard(propertyId);
   const byStatus = new Map(statusCounts.map(c => [c.status, c]));
+
+  // Build href helper that preserves the propertyId scope on every link
+  const scopeQs = propertyId ? `&propertyId=${propertyId}` : "";
 
   return (
     <>
-      <TopBar title="Dashboard" subtitle="Utility AP workflow at a glance" />
+      <TopBar
+        title={scopedProperty ? `Dashboard · ${scopedProperty.name}` : "Dashboard"}
+        subtitle={scopedProperty
+          ? `${scopedProperty.full_code} · scoped to single property`
+          : "Utility AP workflow at a glance"}
+      />
+      <div className="px-8 py-3 bg-white border-b border-nurock-border">
+        <DashboardPropertyPicker
+          properties={properties ?? []}
+          currentPropertyId={propertyId}
+        />
+      </div>
       <div className="p-8 space-y-6 max-w-[1600px] mx-auto w-full">
 
         <section>
@@ -74,7 +108,7 @@ export default async function DashboardPage() {
             <AttentionCard
               label="Variance flagged"
               count={flagged}
-              href="/invoices?flagged=true"
+              href={`/invoices?flagged=true${scopeQs}`}
               tone="amber"
               note="Bills above baseline threshold awaiting explanation"
             />
@@ -82,7 +116,7 @@ export default async function DashboardPage() {
               label="Due within 3 days"
               count={dueSoon}
               sub={dueSoon > 0 ? formatDollars(dueSoonAmount) : undefined}
-              href="/invoices?due=soon"
+              href={`/invoices?due=soon${scopeQs}`}
               tone="red"
             />
             <AttentionCard
@@ -91,7 +125,7 @@ export default async function DashboardPage() {
               sub={(byStatus.get("ready_for_approval")?.count ?? 0) > 0
                 ? formatDollars(byStatus.get("ready_for_approval")?.amount ?? 0)
                 : undefined}
-              href="/invoices?status=ready_for_approval"
+              href={`/invoices?status=ready_for_approval${scopeQs}`}
               tone="navy"
             />
           </div>
@@ -102,7 +136,7 @@ export default async function DashboardPage() {
             <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.08em] text-nurock-slate">
               Workflow stages
             </h2>
-            <Link href="/invoices" className="text-[12.5px] text-nurock-navy hover:underline font-medium">
+            <Link href={`/invoices${propertyId ? `?propertyId=${propertyId}` : ""}`} className="text-[12.5px] text-nurock-navy hover:underline font-medium">
               View all invoices →
             </Link>
           </div>
@@ -119,7 +153,7 @@ export default async function DashboardPage() {
               return (
                 <Link
                   key={status}
-                  href={showUploadCta ? "/invoices/upload" : `/invoices?status=${status}`}
+                  href={showUploadCta ? "/invoices/upload" : `/invoices?status=${status}${scopeQs}`}
                   className={cn(
                     "kpi-tile hover:shadow-card-h transition-shadow",
                     isEmpty && "opacity-80",

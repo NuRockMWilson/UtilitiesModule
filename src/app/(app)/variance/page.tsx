@@ -3,6 +3,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { formatDate, formatDollars, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { VarianceRecomputeButton } from "@/components/admin/VarianceRecomputeButton";
 
 export default async function VarianceInquiriesPage() {
   const supabase = createSupabaseServerClient();
@@ -30,6 +31,7 @@ export default async function VarianceInquiriesPage() {
         subtitle={`${openCount} awaiting property response`}
       />
       <div className="p-8 space-y-4">
+        <VarianceRecomputeButton />
         {rows.length === 0 && (
           <div className="card p-10 text-center text-nurock-slate">
             No variance inquiries have been sent yet.

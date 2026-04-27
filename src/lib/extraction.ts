@@ -78,42 +78,50 @@ Respond with JSON only, matching the schema provided. Rules:
 - If the document is NOT a utility bill (e.g., a notice, a letter, a legal demand), return nulls across the board, extraction_confidence=0, and a warning explaining what the document is.`;
 
 /**
- * Supported input shapes for extraction. PDFs are expected to be rendered to
- * page images before reaching this function — the upload pipeline handles
- * that conversion automatically. Passing `pdfBase64` alone throws.
+ * Supported input shapes for extraction.
+ *
+ * Two paths:
+ *   1. PDF native — pass `pdfBase64` and Claude receives the PDF directly via
+ *      a `document` content block. Anthropic's API renders pages server-side
+ *      and the model sees them as images. This is the simplest path and
+ *      what the upload pipeline uses.
+ *   2. Pre-rasterized images — pass `imageBase64: string[]`. Useful when you
+ *      already have page images (from a watcher that pre-renders) or when
+ *      you want to send a subset of pages.
+ *
+ * Pass exactly one of the two.
  */
 export interface ExtractInput {
-  /** Deprecated: set imageBase64 instead. Kept for backward compatibility. */
-  pdfBase64?: string;
-  /** Array of base64-encoded page images (PNG/JPEG/GIF/WEBP). */
+  pdfBase64?:   string;
   imageBase64?: string[];
-  model?: string;
+  model?:       string;
 }
 
 // Image block media types supported by the Anthropic SDK.
 type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
-// Inline union of message content block shapes. Kept inline rather than
-// imported from the SDK because the SDK's type paths have shifted across
-// versions. The installed SDK accepts exactly text + image (not document)
-// blocks in user messages, so PDFs must be rendered to images beforehand.
+// Content blocks accepted by the SDK in user messages: text, image, document.
+// Document blocks accept PDFs natively — the API rasterizes pages server-side.
 type MessageContentBlock =
-  | { type: "text";  text: string }
-  | { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } };
+  | { type: "text";     text: string }
+  | { type: "image";    source: { type: "base64"; media_type: ImageMediaType; data: string } }
+  | { type: "document"; source: { type: "base64"; media_type: "application/pdf"; data: string } };
 
 export async function extractBill(input: ExtractInput): Promise<ExtractedBillT> {
   const model = input.model ?? process.env.ANTHROPIC_EXTRACTION_MODEL ?? "claude-opus-4-7";
 
-  if (input.pdfBase64 && (!input.imageBase64 || input.imageBase64.length === 0)) {
-    throw new Error(
-      "PDFs must be rendered to page images before extraction. " +
-      "Pass `imageBase64: string[]` — the upload pipeline handles this conversion.",
-    );
+  if (!input.pdfBase64 && (!input.imageBase64 || input.imageBase64.length === 0)) {
+    throw new Error("Either pdfBase64 or imageBase64 must be provided");
   }
 
   const content: MessageContentBlock[] = [];
 
-  if (input.imageBase64) {
+  if (input.pdfBase64) {
+    content.push({
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: input.pdfBase64 },
+    });
+  } else if (input.imageBase64) {
     for (const img of input.imageBase64) {
       content.push({
         type: "image",
@@ -131,7 +139,13 @@ export async function extractBill(input: ExtractInput): Promise<ExtractedBillT> 
     model,
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content }],
+    // Cast to any — the Anthropic API accepts `document` content blocks for
+    // native PDF input, but @anthropic-ai/sdk@0.30.1's TypeScript types only
+    // declare TextBlockParam | ImageBlockParam | ToolUseBlockParam |
+    // ToolResultBlockParam in MessageParam.content. The runtime call works
+    // fine; we cast at the boundary to avoid the strict-mode error.
+    // Upgrade the SDK to a version with DocumentBlockParam to remove this.
+    messages: [{ role: "user", content: content as any }],
   });
 
   const textBlock = response.content.find(b => b.type === "text");

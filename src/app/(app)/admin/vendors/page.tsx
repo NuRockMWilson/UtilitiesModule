@@ -1,12 +1,15 @@
+import Link from "next/link";
 import { TopBar } from "@/components/layout/TopBar";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/cn";
+import { deactivateVendor, reactivateVendor } from "./actions";
 
 export default async function AdminVendorsPage() {
   const supabase = createSupabaseServerClient();
   const { data } = await supabase
     .from("vendors")
     .select("id, name, short_name, category, sage_vendor_id, contact_email, active")
+    .order("active", { ascending: false })
     .order("name");
 
   const vendors = data ?? [];
@@ -19,39 +22,67 @@ export default async function AdminVendorsPage() {
           <p className="text-sm text-nurock-slate">
             {vendors.length} vendors · Sage vendor IDs must be set before a property can post bills to Sage.
           </p>
-          <button disabled className="btn-primary opacity-60" title="Coming in next phase">
-            Add vendor
-          </button>
+          <Link href="/admin/vendors/new" className="btn-primary">
+            + Add vendor
+          </Link>
         </div>
         <div className="card overflow-hidden">
-          <table className="min-w-full text-sm divide-y divide-nurock-border">
-            <thead className="bg-[#FAFBFC] text-left text-xs uppercase tracking-wide text-nurock-slate">
+          <table className="min-w-full text-sm">
+            <thead>
               <tr>
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Category</th>
-                <th className="px-4 py-3 font-medium">Sage vendor ID</th>
-                <th className="px-4 py-3 font-medium">Contact</th>
-                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="cell-head">Name</th>
+                <th className="cell-head">Category</th>
+                <th className="cell-head">Sage vendor ID</th>
+                <th className="cell-head">Contact</th>
+                <th className="cell-head">Status</th>
+                <th className="cell-head text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-nurock-border">
+            <tbody>
               {vendors.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-10 text-center text-nurock-slate">
-                  No vendors yet. Add them via the Supabase dashboard for now, or wait for the admin UI.
+                <tr><td colSpan={6} className="cell text-center text-nurock-slate-light py-10">
+                  No vendors yet. <Link href="/admin/vendors/new" className="text-nurock-navy hover:underline font-medium">Add the first one.</Link>
                 </td></tr>
               )}
               {vendors.map((v: any) => (
-                <tr key={v.id}>
-                  <td className="px-4 py-3 font-medium text-nurock-black">{v.name}</td>
-                  <td className="px-4 py-3 capitalize">{v.category?.replace(/_/g, " ") ?? "—"}</td>
-                  <td className="px-4 py-3 font-mono text-xs">
-                    {v.sage_vendor_id ?? <span className="text-flag-red">not set</span>}
+                <tr key={v.id} className={cn("table-row border-b border-nurock-border last:border-b-0", !v.active && "opacity-60")}>
+                  <td className="cell">
+                    <Link href={`/admin/vendors/${v.id}/edit`} className="text-nurock-navy hover:underline font-medium">
+                      {v.name}
+                    </Link>
+                    {v.short_name && <span className="text-[11px] text-nurock-slate-light ml-1.5">({v.short_name})</span>}
                   </td>
-                  <td className="px-4 py-3 text-xs text-nurock-slate">{v.contact_email ?? "—"}</td>
-                  <td className="px-4 py-3">
-                    <span className={cn("badge", v.active ? "badge-green" : "bg-nurock-flag-slate-bg text-nurock-slate")}>
+                  <td className="cell capitalize text-nurock-slate">{v.category?.replace(/_/g, " ") ?? "—"}</td>
+                  <td className="cell">
+                    {v.sage_vendor_id
+                      ? <span className="code">{v.sage_vendor_id}</span>
+                      : <span className="text-flag-red text-[11px]">not set</span>}
+                  </td>
+                  <td className="cell text-[12px] text-nurock-slate">{v.contact_email ?? "—"}</td>
+                  <td className="cell">
+                    <span className={cn("badge", v.active ? "badge-green" : "badge-slate")}>
                       {v.active ? "Active" : "Inactive"}
                     </span>
+                  </td>
+                  <td className="cell text-right">
+                    <div className="inline-flex items-center gap-1">
+                      <Link href={`/admin/vendors/${v.id}/edit`} className="btn-ghost text-[11px] px-2 py-1">Edit</Link>
+                      {v.active ? (
+                        <form action={deactivateVendor}>
+                          <input type="hidden" name="id" value={v.id} />
+                          <button type="submit" className="btn-ghost text-[11px] px-2 py-1 text-nurock-slate hover:text-flag-red">
+                            Deactivate
+                          </button>
+                        </form>
+                      ) : (
+                        <form action={reactivateVendor}>
+                          <input type="hidden" name="id" value={v.id} />
+                          <button type="submit" className="btn-ghost text-[11px] px-2 py-1 text-nurock-slate hover:text-flag-green">
+                            Reactivate
+                          </button>
+                        </form>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

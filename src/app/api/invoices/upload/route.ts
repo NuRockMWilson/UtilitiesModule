@@ -47,9 +47,24 @@ export async function POST(request: NextRequest) {
     }
     results.push({ name: file.name, invoice_id: inv.id });
 
-    // Kick off extraction in the background
-    fetch(`${process.env.NEXT_PUBLIC_APP_URL ?? ""}/api/extract/${inv.id}`, { method: "POST" })
-      .catch(() => {});
+    // Run extraction inline. The upload UI shows a per-file status row, so a
+    // 10-30s wait per bill is acceptable and avoids the unreliability of
+    // fire-and-forget HTTP from a serverless function (the function might
+    // terminate before fetch resolves).
+    //
+    // For bulk uploads of more than ~5 bills at once we'd want a proper
+    // queue (Supabase Edge Functions or Inngest), but the realistic flow
+    // is one bill at a time as Sharon scans them in.
+    try {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin;
+      const extractRes = await fetch(`${appUrl}/api/extract/${inv.id}`, { method: "POST" });
+      if (!extractRes.ok) {
+        const body = await extractRes.text().catch(() => "");
+        console.error(`Extraction failed for ${inv.id}:`, extractRes.status, body.slice(0, 500));
+      }
+    } catch (e) {
+      console.error(`Extraction request failed for ${inv.id}:`, (e as Error).message);
+    }
   }
 
   return NextResponse.json({ results });

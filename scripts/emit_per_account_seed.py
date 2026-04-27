@@ -31,7 +31,8 @@ from datetime import date
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _account_detail_parser import (  # noqa: E402
     parse_water_accounts, parse_house_meters_accounts, parse_garbage_accounts,
-    parse_phone_cable_accounts,
+    parse_phone_cable_accounts, parse_fedex_accounts, parse_vacant_units_accounts,
+    parse_fixed_accounts,
 )
 
 from openpyxl import load_workbook  # noqa: E402
@@ -88,10 +89,13 @@ def month_date(year, month):
 
 def collect_all_workbooks(converted_dir):
     """Walk all property workbooks and build a unified record set."""
-    all_water         = {}  # property_code → parser result
+    all_water         = {}
     all_house_meters  = {}
     all_garbage       = {}
     all_phone_cable   = {}
+    all_fedex         = {}
+    all_vacant        = {}
+    all_fixed         = {}
 
     for code, fname in PROPERTY_WORKBOOKS.items():
         path = Path(converted_dir) / fname
@@ -131,7 +135,24 @@ def collect_all_workbooks(converted_dir):
                     all_phone_cable[code] = r
                 break
 
-    return all_water, all_house_meters, all_garbage, all_phone_cable
+        if "FedEx" in wb.sheetnames:
+            r = parse_fedex_accounts(wb["FedEx"], year)
+            if r and r.get("accounts"):
+                all_fedex[code] = r
+
+        for vu_sheet in ("Vac Units", "Vacant Units", "VacUnits"):
+            if vu_sheet in wb.sheetnames:
+                r = parse_vacant_units_accounts(wb[vu_sheet], year)
+                if r and r.get("accounts"):
+                    all_vacant[code] = r
+                break
+
+        if "FIXED" in wb.sheetnames:
+            r = parse_fixed_accounts(wb["FIXED"], year)
+            if r and r.get("accounts"):
+                all_fixed[code] = r
+
+    return all_water, all_house_meters, all_garbage, all_phone_cable, all_fedex, all_vacant, all_fixed
 
 
 # ----------------------------------------------------------------------------
@@ -192,7 +213,7 @@ create unique index if not exists vendors_name_key on vendors (name);
 """
 
 
-def emit_vendors(water, hse_meters, garbage, phone_cable):
+def emit_vendors(water, hse_meters, garbage, phone_cable, fedex=None, vacant=None, fixed=None):
     """Emit all distinct vendors discovered across the workbooks."""
     lines = ["-- Vendors discovered from legacy workbooks"]
     seen = set()
@@ -200,7 +221,10 @@ def emit_vendors(water, hse_meters, garbage, phone_cable):
     for src, cat in ((water, "water"),
                      (hse_meters, "electric"),
                      (garbage, "trash"),
-                     (phone_cable, "phone")):
+                     (phone_cable, "phone"),
+                     (fedex or {}, "fedex"),
+                     (vacant or {}, "electric"),
+                     (fixed or {}, "other")):
         for code, data in src.items():
             # Sheet-level vendor
             name = data.get("vendor_name")
@@ -370,6 +394,73 @@ from inv
     return "\n".join(lines)
 
 
+def emit_vacant_charges(vacant):
+    """
+    Emit per-unit-per-month rows into the dedicated vacant_unit_charges table.
+
+    Vacant electric charges are stored separately from invoices because they
+    represent allocated cost off a master vacant-unit account, not real AP
+    invoices. The Vacant Units detail page reads from this table directly.
+    """
+    if not vacant:
+        return ""
+
+    rows = []
+    for pc, data in sorted(vacant.items()):
+        year = data.get("year", date.today().year)
+        for acct in data.get("accounts", []):
+            unit_number = acct.get("unit_number") or acct.get("description")
+            if not unit_number:
+                continue
+            account_number = acct.get("account_number")
+            meter_id = acct.get("meter_id")
+            for month, md in acct.get("by_month", {}).items():
+                amount = md.get("amount") if isinstance(md, dict) else md
+                if not amount or amount <= 0:
+                    continue
+                rows.append({
+                    "property_code":  pc,
+                    "unit_number":    str(unit_number),
+                    "year":           year,
+                    "month":          month,
+                    "amount":         amount,
+                    "meter_id":       meter_id,
+                    "account_number": account_number,
+                })
+
+    if not rows:
+        return ""
+
+    lines = [f"-- {len(rows):,} vacant unit charges"]
+    lines.append("delete from vacant_unit_charges where source = 'historical_import_per_account';")
+    lines.append("with vc(property_code, unit_number, yr, mo, amount, meter_id, account_number) as (values")
+    vals = [
+        f"  ({sql_str(r['property_code'])}, {sql_str(r['unit_number'])}, "
+        f"{r['year']}, {r['month']}, {sql_dec(r['amount'])}, "
+        f"{sql_str(r['meter_id'])}, {sql_str(r['account_number'])})"
+        for r in rows
+    ]
+    lines.append(",\n".join(vals))
+    lines.append(")")
+    lines.append("""insert into vacant_unit_charges
+  (property_id, unit_number, year, month, amount, meter_id, account_number,
+   gl_account_id, gl_coding, source)
+select
+  p.id, vc.unit_number, vc.yr, vc.mo, vc.amount, vc.meter_id, vc.account_number,
+  g.id, '500-' || p.code || '-5114.00',
+  'historical_import_per_account'
+from vc
+  join properties p   on p.code = vc.property_code
+  left join gl_accounts g on g.code = '5114'
+on conflict (property_id, unit_number, year, month) do update
+  set amount = excluded.amount,
+      meter_id = excluded.meter_id,
+      account_number = excluded.account_number,
+      source = excluded.source;
+""")
+    return "\n".join(lines)
+
+
 def emit_simple_invoices(all_data, gl_code, source_ref_tag):
     """
     Emit one invoice per (account × month) for Hse Meters / Garbage / Phone&Cable / FedEx.
@@ -391,6 +482,8 @@ def emit_simple_invoices(all_data, gl_code, source_ref_tag):
             if not an: continue
             # Per-row vendor takes precedence (Phone&Cable)
             vendor_name = acct.get("vendor_name") or sheet_vendor
+            # Per-row gl_code takes precedence (FIXED)
+            row_gl = acct.get("gl_code") or sheet_gl
             for month, md in acct.get("by_month", {}).items():
                 amount = md.get("amount") if isinstance(md, dict) else md
                 if not amount or amount <= 0: continue
@@ -399,7 +492,7 @@ def emit_simple_invoices(all_data, gl_code, source_ref_tag):
                     "property_code":  pc,
                     "vendor_name":    vendor_name,
                     "account_number": an,
-                    "gl_code":        sheet_gl,
+                    "gl_code":        row_gl,
                     "invoice_number": invoice_number,
                     "year":           year,
                     "month":          month,
@@ -459,11 +552,14 @@ def main():
                               "supabase/migrations/0012_per_account_historical.sql")
 
     print(f"Reading workbooks from {converted_dir}...")
-    water, hm, garbage, phone_cable = collect_all_workbooks(converted_dir)
+    water, hm, garbage, phone_cable, fedex, vacant, fixed = collect_all_workbooks(converted_dir)
     print(f"  Water:       {len(water)} properties")
     print(f"  Hse Meters:  {len(hm)} properties")
     print(f"  Garbage:     {len(garbage)} properties")
     print(f"  Phone&Cable: {len(phone_cable)} properties")
+    print(f"  FedEx:       {len(fedex)} properties")
+    print(f"  Vacant:      {len(vacant)} properties")
+    print(f"  FIXED:       {len(fixed)} properties")
 
     # Water: one account can have 3 GL accounts (water/sewer/irrigation)
     def water_gls(acct):
@@ -475,17 +571,27 @@ def main():
             if md.get("irrigation"): needed.add("5122")
         return sorted(needed)
 
+    # FIXED: each account has its own gl_code attached at parse time
+    def fixed_gls(acct):
+        gl = acct.get("gl_code")
+        return [gl] if gl else []
+
     sections = [
         emit_reset_header(),
-        emit_vendors(water, hm, garbage, phone_cable),
+        emit_vendors(water, hm, garbage, phone_cable, fedex, vacant, fixed),
         emit_utility_accounts(water,       water_gls),
         emit_utility_accounts(hm,          "5112"),
         emit_utility_accounts(garbage,     "5135"),
-        emit_utility_accounts(phone_cable, "5635"),  # sheet-level override in emit_simple_invoices
+        emit_utility_accounts(phone_cable, "5635"),
+        emit_utility_accounts(fedex,       "5620"),
+        emit_utility_accounts(fixed,       fixed_gls),
         emit_water_invoices(water),
         emit_simple_invoices(hm,          "5112", "House Meters"),
         emit_simple_invoices(garbage,     "5135", "Garbage"),
         emit_simple_invoices(phone_cable, "5635", "Phone&Cable"),
+        emit_simple_invoices(fedex,       "5620", "FedEx"),
+        emit_simple_invoices(fixed,       None,   "FIXED"),
+        emit_vacant_charges(vacant),
     ]
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)

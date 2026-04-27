@@ -2,6 +2,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getAdapter } from "@/lib/sage/adapter";
 import { cn } from "@/lib/cn";
+import { PipelineSelfTestButton } from "@/components/admin/PipelineSelfTestButton";
 
 export default async function AdminSagePage() {
   const supabase = createSupabaseServerClient();
@@ -47,6 +48,8 @@ export default async function AdminSagePage() {
             note="Stub in place; live posting activates once the Intacct migration completes and credentials are set. Flip individual properties to sage_intacct as they go live."
           />
         </div>
+
+        <PipelineSelfTestButton />
 
         <div className="card overflow-hidden">
           <div className="px-5 py-3 border-b border-nurock-border">
