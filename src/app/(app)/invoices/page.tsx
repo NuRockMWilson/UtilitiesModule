@@ -23,30 +23,47 @@ const STATUS_FILTERS: Array<{ value: string; label: string }> = [
 export default async function InvoicesPage({ searchParams }: Props) {
   const supabase = createSupabaseServerClient();
 
-  let query = supabase
-    .from("invoices")
-    .select(`
-      id, invoice_number, invoice_date, due_date, total_amount_due,
-      status, variance_flagged, variance_pct, gl_coding,
-      property:properties(id, code, name),
-      vendor:vendors(id, name),
-      gl:gl_accounts(code, description)
-    `)
-    .order("submitted_at", { ascending: false })
-    .limit(25000);
+  // PostgREST caps every API request at ~1000 rows regardless of `.limit()`,
+  // so a single fetch can never see the full historical baseline. We page
+  // through in chunks of 1000 with `.range()` and stop once we've either
+  // gotten everything or hit a sane upper bound. The bound exists so a bad
+  // filter doesn't accidentally pull a million rows on every page load.
+  const PAGE_SIZE = 1000;
+  const MAX_ROWS  = 25_000;
 
-  if (searchParams.status) query = query.eq("status", searchParams.status as InvoiceStatus);
-  const propertyFilter = searchParams.propertyId ?? searchParams.property;
-  if (propertyFilter) query = query.eq("property_id", propertyFilter);
-  if (searchParams.flagged === "true") query = query.eq("variance_flagged", true);
-  if (searchParams.due === "soon") {
-    const threeDays = new Date();
-    threeDays.setDate(threeDays.getDate() + 3);
-    query = query.lte("due_date", threeDays.toISOString().slice(0, 10));
+  function buildQuery() {
+    let q = supabase
+      .from("invoices")
+      .select(`
+        id, invoice_number, invoice_date, due_date, total_amount_due,
+        status, variance_flagged, variance_pct, gl_coding,
+        property:properties(id, code, name),
+        vendor:vendors(id, name),
+        gl:gl_accounts(code, description)
+      `)
+      .order("submitted_at", { ascending: false });
+    if (searchParams.status) q = q.eq("status", searchParams.status as InvoiceStatus);
+    const propertyFilter = searchParams.propertyId ?? searchParams.property;
+    if (propertyFilter) q = q.eq("property_id", propertyFilter);
+    if (searchParams.flagged === "true") q = q.eq("variance_flagged", true);
+    if (searchParams.due === "soon") {
+      const threeDays = new Date();
+      threeDays.setDate(threeDays.getDate() + 3);
+      q = q.lte("due_date", threeDays.toISOString().slice(0, 10));
+    }
+    return q;
   }
 
-  const { data, error } = await query;
-  const rows = data ?? [];
+  const rows: any[] = [];
+  let error: { message: string } | null = null;
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    const { data, error: pageErr } = await buildQuery().range(from, from + PAGE_SIZE - 1);
+    if (pageErr) { error = pageErr; break; }
+    if (!data || data.length === 0) break;
+    rows.push(...data);
+    // Short page → no more rows beyond this. Stop early to save round-trips.
+    if (data.length < PAGE_SIZE) break;
+  }
 
   return (
     <>
