@@ -12,6 +12,7 @@ import { LinkInvoicePanel } from "@/components/invoices/LinkInvoicePanel";
 import { DeleteInvoiceButton } from "@/components/invoices/DeleteInvoiceButton";
 import { EditableBillDetails, type EditableInvoice } from "@/components/invoices/EditableBillDetails";
 import { DistributionsPanel, type DistributionLine } from "@/components/invoices/DistributionsPanel";
+import { AttachPdfButton } from "@/components/invoices/AttachPdfButton";
 
 export default async function InvoiceDetailPage({ params }: { params: { id: string } }) {
   const supabase = createSupabaseServerClient();
@@ -138,12 +139,25 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
       <div className="p-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: PDF viewer */}
         <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] uppercase tracking-wide text-nurock-slate font-medium">
+              {invoice.pdf_path ? "Bill PDF" : "No PDF attached"}
+            </div>
+            <AttachPdfButton invoiceId={invoice.id} hasExistingPdf={!!invoice.pdf_path} />
+          </div>
           <div className="card p-0 overflow-hidden aspect-[8.5/11] bg-[#FAFBFC]">
             {pdfUrl ? (
               <iframe src={pdfUrl} className="w-full h-full" title="Bill PDF" />
             ) : (
-              <div className="flex items-center justify-center h-full text-nurock-slate text-sm">
-                No PDF attached to this invoice.
+              <div className="flex flex-col items-center justify-center h-full text-nurock-slate text-sm gap-2 px-8 text-center">
+                <div>No PDF attached to this invoice.</div>
+                {typeof invoice.source_reference === "string" && invoice.source_reference.startsWith("historical-") && (
+                  <div className="text-[12px] text-nurock-slate-light max-w-md">
+                    This invoice was loaded from the legacy spreadsheet by migration 0015.
+                    You can attach the original PDF here for paper-trail purposes — the
+                    recorded amount won't be overwritten.
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -207,7 +221,8 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
               raw_extraction:         invoice.raw_extraction,
               vendor_name:            (invoice.vendor as any)?.name ?? null,
               utility_account_number: (invoice.utility_account as any)?.account_number ?? null,
-              fields_edited:          (logEntries ?? []).some((e: any) => e.action === "fields_edited"),
+              fields_edited:          (logEntries ?? []).some((e: any) => e.action === "fields_edited" || e.action === "fields_edited_historical"),
+              is_historical:          typeof invoice.source_reference === "string" && invoice.source_reference.startsWith("historical-"),
             } satisfies EditableInvoice}
           />
 
@@ -216,11 +231,14 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
             invoiceTotal={invoice.total_amount_due}
             initial={distributionLines}
             glAccounts={(glAccountsForEditor ?? []) as Array<{ id: string; code: string; description: string }>}
-            canEdit={[
-              "new", "extracting", "extraction_failed",
-              "needs_coding", "needs_variance_note",
-              "ready_for_approval", "rejected",
-            ].includes(invoice.status as string)}
+            canEdit={
+              [
+                "new", "extracting", "extraction_failed",
+                "needs_coding", "needs_variance_note",
+                "ready_for_approval", "rejected",
+              ].includes(invoice.status as string) ||
+              (typeof invoice.source_reference === "string" && invoice.source_reference.startsWith("historical-"))
+            }
           />
 
           {usageReadings && usageReadings.length > 0 && (

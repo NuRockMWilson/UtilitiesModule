@@ -97,7 +97,7 @@ export async function editInvoiceFields(formData: FormData): Promise<EditFieldsR
   const { data: existing, error: getErr } = await supabase
     .from("invoices")
     .select(`
-      id, status, utility_account_id,
+      id, status, utility_account_id, source_reference,
       invoice_number, invoice_date, due_date,
       service_period_start, service_period_end, service_days,
       current_charges, adjustments, late_fees, total_amount_due,
@@ -107,7 +107,14 @@ export async function editInvoiceFields(formData: FormData): Promise<EditFieldsR
     .single();
   if (getErr || !existing) return { ok: false, error: getErr?.message ?? "Invoice not found" };
 
-  if (!EDITABLE_STATUSES.has(existing.status)) {
+  // Historical invoices (loaded by migration 0015) are kept in
+  // 'posted_to_sage' status so they appear in variance baselines, but we
+  // explicitly allow editing them so users can fix bad rows that didn't
+  // come cleanly out of the legacy spreadsheet.
+  const isHistorical = typeof existing.source_reference === "string"
+    && existing.source_reference.startsWith("historical-");
+
+  if (!EDITABLE_STATUSES.has(existing.status) && !isHistorical) {
     return {
       ok: false,
       error: `Cannot edit an invoice in status "${existing.status}". Approved and posted invoices must be rejected before changes can be made.`,
@@ -190,12 +197,14 @@ export async function editInvoiceFields(formData: FormData): Promise<EditFieldsR
     }).eq("id", invoiceId);
   }
 
-  // Audit log entry — list every changed field with its before and after
+  // Audit log entry — list every changed field with its before and after.
+  // Tag the action specifically when this is a historical-baseline edit so
+  // we can trace any post-migration corrections back to migration 0015.
   await supabase.from("approval_log").insert({
     invoice_id: invoiceId,
-    action:     "fields_edited",
-    notes:      `Edited ${diff.length} field${diff.length === 1 ? "" : "s"}: ${diff.map(d => d.field).join(", ")}`,
-    metadata:   { diff },
+    action:     isHistorical ? "fields_edited_historical" : "fields_edited",
+    notes:      `${isHistorical ? "[historical] " : ""}Edited ${diff.length} field${diff.length === 1 ? "" : "s"}: ${diff.map(d => d.field).join(", ")}`,
+    metadata:   { diff, is_historical: isHistorical },
   });
 
   revalidatePath(`/invoices/${invoiceId}`);

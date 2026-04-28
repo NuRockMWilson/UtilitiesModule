@@ -49,11 +49,13 @@ export async function saveDistributions(formData: FormData): Promise<Distributio
 
   const { data: invoice, error: getErr } = await supabase
     .from("invoices")
-    .select("id, status, property_id, total_amount_due")
+    .select("id, status, property_id, total_amount_due, source_reference")
     .eq("id", invoiceId)
     .single();
   if (getErr || !invoice) return { ok: false, error: getErr?.message ?? "Invoice not found" };
-  if (!EDITABLE_STATUSES.has(invoice.status)) {
+  const isHistorical = typeof invoice.source_reference === "string"
+    && invoice.source_reference.startsWith("historical-");
+  if (!EDITABLE_STATUSES.has(invoice.status) && !isHistorical) {
     return { ok: false, error: `Cannot edit distributions on an invoice in status "${invoice.status}".` };
   }
 

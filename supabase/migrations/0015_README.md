@@ -10,26 +10,29 @@ four parts.
 | File | Purpose | Size |
 |------|---------|------|
 | `0015a_per_meter_historical.sql` | Cleanup of migration 0012's bad data + create 160 placeholder vendors | ~34KB |
-| `0015b_per_meter_historical.sql` | Insert 1,351 utility_accounts | ~155KB |
-| `0015c_per_meter_historical.sql` | Insert first 6,000 historical invoices | ~735KB |
-| `0015d_per_meter_historical.sql` | Insert remaining ~5,412 historical invoices + sanity check | ~664KB |
-| `0015_per_meter_historical.sql.combined-do-not-apply` | Original single-file version, preserved for reference. **Do not apply this directly.** | 1.6MB |
+| `0015b_per_meter_historical.sql` | Insert 1,351 utility_accounts (single CTE-based INSERT) | ~136KB |
+| `0015c_per_meter_historical.sql` | Insert first 5,700 historical invoices (single CTE-based INSERT) | ~698KB |
+| `0015d_per_meter_historical.sql` | Insert remaining 5,712 historical invoices + sanity check (single CTE-based INSERT) | ~698KB |
+| `0015_per_meter_historical.sql.combined-do-not-apply` | Original single-file version, preserved for reference. **Do not apply this directly** — it uses temp tables that don't survive Supabase's pooled connections. | 1.6MB |
 
 ## How to apply
 
 ### Option A: Supabase SQL Editor (4 separate runs)
-Apply each file in order: `0015a`, then `0015b`, then `0015c`, then `0015d`. Each
-file wraps its own transaction (`BEGIN; ... COMMIT;`) so a failure in any part
-rolls back cleanly without affecting the others.
+Apply each file in order: `0015a`, then `0015b`, then `0015c`, then `0015d`.
 
-After 0015d completes, the sanity check inside it verifies the cumulative row
-counts across all four parts. If counts are off, the transaction inside 0015d
-rolls back but parts a/b/c remain applied — re-run 0015d after fixing.
+Each of `0015b`/`0015c`/`0015d` is structured as a **single CTE-based INSERT
+statement** (no temp tables, no multi-statement transactions). This works
+under Supabase's pooled-connection SQL Editor where `BEGIN;`/`COMMIT;` markers
+don't reliably pin the session and temp tables created in one statement
+don't survive to the next.
+
+`0015a` does have multiple statements wrapped in `BEGIN;`/`COMMIT;` but only
+performs `DELETE` and a single `INSERT INTO vendors`, none of which depend
+on session-level temp objects.
 
 ### Option B: Supabase CLI (`supabase db push`)
 The CLI applies each `.sql` file in lexicographic order, so `0015a` → `0015b` →
-`0015c` → `0015d` happen automatically. The combined file has a `.combined-do-
-not-apply` extension so the CLI ignores it.
+`0015c` → `0015d` happen automatically.
 
 ### Option C: psql against the connection string
 ```bash
@@ -38,6 +41,35 @@ psql "$DATABASE_URL" -f supabase/migrations/0015b_per_meter_historical.sql
 psql "$DATABASE_URL" -f supabase/migrations/0015c_per_meter_historical.sql
 psql "$DATABASE_URL" -f supabase/migrations/0015d_per_meter_historical.sql
 ```
+
+## Why CTE instead of temp tables?
+
+The original combined migration used `CREATE TEMP TABLE` to stage rows before
+the final `INSERT ... SELECT FROM <temp> JOIN <real tables>`. This pattern
+fails under Supabase's pooled SQL Editor with the error:
+
+> ERROR: relation "_hist_seed" does not exist
+
+because the temp table is created on connection A, and the subsequent INSERT
+runs on connection B where the table doesn't exist. `BEGIN;`/`COMMIT;` doesn't
+help because the editor processes statements separately.
+
+The fix: turn each part into a single statement using a CTE:
+
+```sql
+with seed (...) as (values
+  ('508', 'HIST-508-5120', '5120', '...'),
+  ...
+)
+insert into utility_accounts (...)
+select ... from seed s
+join properties p on p.code = s.property_code
+join vendors v on v.short_name = s.vendor_short
+join gl_accounts g on g.code = s.gl_code
+on conflict (vendor_id, account_number) do nothing;
+```
+
+Everything happens in one round-trip. No temp tables, no session state.
 
 ## Idempotency
 

@@ -34,15 +34,20 @@ export async function deleteInvoice(formData: FormData): Promise<DeleteResult> {
   const supabase = createSupabaseServerClient();
   const service  = createSupabaseServiceClient();
 
-  // Status guard — only delete if not yet approved/posted
+  // Status guard — only delete if not yet approved/posted (or if it's a
+  // historical baseline row, which is always deletable since it was never
+  // truly posted to Sage — just imported with that status flag).
   const { data: inv, error: getErr } = await supabase
     .from("invoices")
-    .select("id, status, pdf_path, sage_batch_id")
+    .select("id, status, pdf_path, sage_batch_id, source_reference")
     .eq("id", id)
     .single();
   if (getErr || !inv) return { ok: false, error: getErr?.message ?? "Invoice not found" };
 
-  if (!DELETABLE_STATUSES.has(inv.status)) {
+  const isHistorical = typeof inv.source_reference === "string"
+    && inv.source_reference.startsWith("historical-");
+
+  if (!DELETABLE_STATUSES.has(inv.status) && !isHistorical) {
     return {
       ok: false,
       error: `Cannot delete an invoice in status "${inv.status}". Approved and posted invoices stay in the system for audit. Reject the invoice first if you need to take it out of the workflow.`,
@@ -110,12 +115,16 @@ export async function bulkDeleteInvoices(formData: FormData): Promise<{
 
   const { data: rows } = await supabase
     .from("invoices")
-    .select("id, status, pdf_path, sage_batch_id")
+    .select("id, status, pdf_path, sage_batch_id, source_reference")
     .in("id", ids);
 
-  const deletable = (rows ?? []).filter(r =>
-    DELETABLE_STATUSES.has(r.status) && !r.sage_batch_id
-  );
+  const deletable = (rows ?? []).filter(r => {
+    if (r.sage_batch_id) return false;
+    if (DELETABLE_STATUSES.has(r.status)) return true;
+    // Historical-baseline rows are always deletable (never truly posted)
+    return typeof r.source_reference === "string"
+        && r.source_reference.startsWith("historical-");
+  });
   const skipped = ids.length - deletable.length;
 
   if (deletable.length === 0) {

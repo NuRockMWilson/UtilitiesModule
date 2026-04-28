@@ -37,6 +37,15 @@ export type EditableInvoice = {
   vendor_name:           string | null;          // from joined vendors
   utility_account_number: string | null;         // from joined utility_accounts
   fields_edited:         boolean;
+  /**
+   * True when the invoice was created by migration 0015 as part of the
+   * historical baseline (source_reference LIKE 'historical-%'). These
+   * invoices are kept in `posted_to_sage` status so they appear in
+   * variance baselines, but we explicitly allow editing them so users can
+   * correct typos, swap vendors, or adjust amounts that didn't make it
+   * cleanly out of the legacy spreadsheet.
+   */
+  is_historical:         boolean;
 };
 
 const EDITABLE_STATUSES = new Set<InvoiceStatus>([
@@ -45,13 +54,17 @@ const EDITABLE_STATUSES = new Set<InvoiceStatus>([
   "ready_for_approval", "rejected",
 ]);
 
+function canEditInvoice(invoice: { status: InvoiceStatus; is_historical: boolean }): boolean {
+  return EDITABLE_STATUSES.has(invoice.status) || invoice.is_historical;
+}
+
 export function EditableBillDetails({ invoice }: { invoice: EditableInvoice }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const canEdit = EDITABLE_STATUSES.has(invoice.status);
+  const canEdit = canEditInvoice(invoice);
   const raw     = invoice.raw_extraction ?? {};
 
   function submit(e: React.FormEvent<HTMLFormElement>) {
@@ -81,6 +94,14 @@ export function EditableBillDetails({ invoice }: { invoice: EditableInvoice }) {
               className="text-[10px] uppercase tracking-wide bg-flag-amber/15 text-flag-amber-dark border border-flag-amber/40 px-1.5 py-0.5 rounded"
             >
               edited
+            </span>
+          )}
+          {invoice.is_historical && (
+            <span
+              title="This invoice was loaded from the legacy spreadsheet by migration 0015. Edits update the variance baseline."
+              className="text-[10px] uppercase tracking-wide bg-nurock-tan/30 text-nurock-navy border border-nurock-tan/60 px-1.5 py-0.5 rounded"
+            >
+              historical
             </span>
           )}
         </div>
