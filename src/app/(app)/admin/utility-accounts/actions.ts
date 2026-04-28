@@ -51,8 +51,64 @@ export async function saveAccount(
   };
 
   if (id) {
+    // Fetch the existing UA so we can detect what changed and propagate
+    // denormalized changes to invoices that point to this UA.
+    const { data: existing, error: getErr } = await supabase
+      .from("utility_accounts")
+      .select("id, vendor_id, property_id, gl_account_id, account_number")
+      .eq("id", id)
+      .single();
+    if (getErr || !existing) {
+      return { ok: false, error: getErr?.message ?? "Utility account not found" };
+    }
+
     const { error } = await supabase.from("utility_accounts").update(payload).eq("id", id);
     if (error) return { ok: false, error: error.message };
+
+    // Invoices store a denormalized copy of vendor_id, property_id, gl_account_id
+    // for query-speed reasons (see schema comment in 0001_initial_schema.sql).
+    // When any of those change on the UA, push the change down to every invoice
+    // that points to this UA. Without this propagation the Bill details panel
+    // would still show the old vendor name even after the UA has been moved.
+    const denormPatch: Record<string, string> = {};
+    if (existing.vendor_id     !== vendor_id)     denormPatch.vendor_id     = vendor_id;
+    if (existing.property_id   !== property_id)   denormPatch.property_id   = property_id;
+    if (existing.gl_account_id !== gl_account_id) denormPatch.gl_account_id = gl_account_id;
+
+    if (Object.keys(denormPatch).length > 0) {
+      // Update all invoices linked to this UA
+      const { data: linkedInvoices } = await supabase
+        .from("invoices")
+        .select("id")
+        .eq("utility_account_id", id);
+
+      const invoiceIds = (linkedInvoices ?? []).map(i => i.id);
+      if (invoiceIds.length > 0) {
+        const { error: invErr } = await supabase
+          .from("invoices")
+          .update(denormPatch)
+          .in("id", invoiceIds);
+        if (invErr) {
+          return { ok: false, error: `UA updated but propagation to invoices failed: ${invErr.message}` };
+        }
+
+        // Log the propagation as an audit entry on each affected invoice.
+        // For historical invoices the action gets a distinguishing tag so we
+        // can trace post-migration vendor consolidations.
+        const fields = Object.keys(denormPatch).join(", ");
+        const logRows = invoiceIds.map(invId => ({
+          invoice_id: invId,
+          action:     "utility_account_relinked",
+          notes:      `Linked utility account had its ${fields} changed; propagated to invoice.`,
+          metadata:   {
+            utility_account_id: id,
+            changed_fields:     denormPatch,
+            previous_vendor_id: existing.vendor_id,
+          },
+        }));
+        await supabase.from("approval_log").insert(logRows);
+      }
+    }
   } else {
     const { error } = await supabase.from("utility_accounts").insert(payload);
     if (error) return { ok: false, error: error.message };

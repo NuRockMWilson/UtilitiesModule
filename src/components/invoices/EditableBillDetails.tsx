@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { editInvoiceFields } from "@/app/(app)/invoices/[id]/edit-actions";
-import { formatDollars, formatDate, formatDays } from "@/lib/format";
+import { formatDollars, formatDays } from "@/lib/format";
+import { formatDateInput } from "@/lib/dates";
 import { StatusPill } from "@/components/ui/StatusPill";
 import type { InvoiceStatus } from "@/lib/types";
 
@@ -36,6 +37,13 @@ export type EditableInvoice = {
   raw_extraction:        any;
   vendor_name:           string | null;          // from joined vendors
   utility_account_number: string | null;         // from joined utility_accounts
+  /**
+   * Linked utility_account id, if any. Used to render the "Edit linked
+   * account" link, which is the supported path for changing the vendor or
+   * account number on an already-linked invoice. (The vendor/account fields
+   * are read-only here because they're owned by the utility_account record.)
+   */
+  utility_account_id:    string | null;
   fields_edited:         boolean;
   /**
    * True when the invoice was created by migration 0015 as part of the
@@ -127,8 +135,26 @@ export function EditableBillDetails({ invoice }: { invoice: EditableInvoice }) {
             <EditField
               label="Vendor"
               value={invoice.vendor_name ?? raw.vendor_name ?? ""}
-              hint={!invoice.vendor_name ? "Edit vendor by linking the bill to a vendor record above. Read-only here." : "Linked vendor — change via the linking panel."}
+              hint={
+                !invoice.vendor_name
+                  ? "Edit vendor by linking the bill to a vendor record above. Read-only here."
+                  : invoice.utility_account_id
+                    ? "To change the vendor, edit the linked utility account."
+                    : "Linked vendor — change via the linking panel."
+              }
               readOnly
+              action={
+                invoice.utility_account_id ? (
+                  <a
+                    href={`/admin/utility-accounts/${invoice.utility_account_id}/edit`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-nurock-navy hover:underline whitespace-nowrap"
+                  >
+                    Edit linked account →
+                  </a>
+                ) : undefined
+              }
             />
             <EditField
               label="Account #"
@@ -138,15 +164,15 @@ export function EditableBillDetails({ invoice }: { invoice: EditableInvoice }) {
               mono
             />
             <EditField name="invoice_number"      label="Invoice #"        value={invoice.invoice_number ?? ""} mono />
-            <EditField name="invoice_date"        label="Invoice date"     value={invoice.invoice_date ?? ""}   mono placeholder="YYYY-MM-DD" />
-            <EditField name="service_period_start" label="Service start"   value={invoice.service_period_start ?? ""} mono placeholder="YYYY-MM-DD" />
-            <EditField name="service_period_end"   label="Service end"     value={invoice.service_period_end ?? ""}   mono placeholder="YYYY-MM-DD" />
+            <EditField name="invoice_date"        label="Invoice date"     value={formatDateInput(invoice.invoice_date)}   mono placeholder="M/D/YYYY" />
+            <EditField name="service_period_start" label="Service start"   value={formatDateInput(invoice.service_period_start)} mono placeholder="M/D/YYYY" />
+            <EditField name="service_period_end"   label="Service end"     value={formatDateInput(invoice.service_period_end)}   mono placeholder="M/D/YYYY" />
             <EditField name="service_days"        label="Service days"     value={invoice.service_days?.toString() ?? ""} mono />
             <EditField name="current_charges"     label="Current charges"  value={invoice.current_charges?.toString() ?? ""} mono />
             <EditField name="adjustments"         label="Adjustments"      value={invoice.adjustments?.toString() ?? "0"}    mono />
             <EditField name="late_fees"           label="Late fees"        value={invoice.late_fees?.toString() ?? "0"}      mono />
             <EditField name="total_amount_due"    label="Total due"        value={invoice.total_amount_due?.toString() ?? ""} mono emphasis />
-            <EditField name="due_date"            label="Due date"         value={invoice.due_date ?? ""}        mono placeholder="YYYY-MM-DD" />
+            <EditField name="due_date"            label="Due date"         value={formatDateInput(invoice.due_date)}        mono placeholder="M/D/YYYY" />
             <div className="md:col-span-2">
               <EditField name="gl_coding"         label="GL coding"        value={invoice.gl_coding ?? ""}       mono emphasis placeholder="500-PROP-GLCODE.SUB" />
             </div>
@@ -190,7 +216,19 @@ function ReadOnlyView({ invoice }: { invoice: EditableInvoice }) {
         hint={
           !invoice.vendor_name && raw.vendor_name
             ? "extracted; not yet linked to a vendor record"
-            : undefined
+            : invoice.utility_account_id
+              ? "to change the vendor, edit the linked utility account"
+              : undefined
+        }
+        action={
+          invoice.utility_account_id ? (
+            <a
+              href={`/admin/utility-accounts/${invoice.utility_account_id}/edit`}
+              className="text-[11px] text-nurock-navy hover:underline whitespace-nowrap"
+            >
+              Edit linked account →
+            </a>
+          ) : undefined
         }
       />
       <Field
@@ -204,37 +242,42 @@ function ReadOnlyView({ invoice }: { invoice: EditableInvoice }) {
         }
       />
       <Field label="Invoice #"       value={invoice.invoice_number ?? raw.invoice_number} mono />
-      <Field label="Invoice date"    value={formatDate(invoice.invoice_date ?? raw.invoice_date)} />
+      <Field label="Invoice date"    value={formatDateInput(invoice.invoice_date ?? raw.invoice_date) || "—"} mono />
       <Field label="Service period"  value={
         invoice.service_period_start && invoice.service_period_end
-          ? `${formatDate(invoice.service_period_start)} – ${formatDate(invoice.service_period_end)}`
+          ? `${formatDateInput(invoice.service_period_start)} – ${formatDateInput(invoice.service_period_end)}`
           : raw.service_period_start && raw.service_period_end
-            ? `${formatDate(raw.service_period_start)} – ${formatDate(raw.service_period_end)}`
+            ? `${formatDateInput(raw.service_period_start)} – ${formatDateInput(raw.service_period_end)}`
             : "—"
-      } />
+      } mono />
       <Field label="Service days"    value={formatDays(invoice.service_days ?? raw.service_days)} />
       <Field label="Current charges" value={formatDollars(invoice.current_charges)} />
       <Field label="Adjustments"     value={formatDollars(invoice.adjustments)} />
       <Field label="Late fees"       value={formatDollars(invoice.late_fees)} />
       <Field label="Total due"       value={formatDollars(invoice.total_amount_due)} emphasis />
-      <Field label="Due date"        value={formatDate(invoice.due_date ?? raw.due_date)} />
+      <Field label="Due date"        value={formatDateInput(invoice.due_date ?? raw.due_date) || "—"} mono />
       <Field label="GL coding"       value={invoice.gl_coding} mono emphasis />
     </dl>
   );
 }
 
 function Field({
-  label, value, hint, mono, emphasis,
+  label, value, hint, mono, emphasis, action,
 }: {
   label: string;
   value: string | null | undefined;
   hint?: string;
   mono?: boolean;
   emphasis?: boolean;
+  /** Optional inline action element (e.g. an "Edit linked account" link) */
+  action?: React.ReactNode;
 }) {
   return (
     <div>
-      <dt className="text-xs uppercase tracking-wide text-nurock-slate">{label}</dt>
+      <div className="flex items-baseline justify-between gap-2">
+        <dt className="text-xs uppercase tracking-wide text-nurock-slate">{label}</dt>
+        {action}
+      </div>
       <dd className={`mt-0.5 ${emphasis ? "font-semibold text-nurock-black" : "text-ink"} ${mono ? "font-mono text-sm" : ""}`}>
         {value ?? "—"}
       </dd>
@@ -246,7 +289,7 @@ function Field({
 }
 
 function EditField({
-  label, value, name, mono, emphasis, readOnly, hint, placeholder,
+  label, value, name, mono, emphasis, readOnly, hint, placeholder, action,
 }: {
   label:        string;
   value:        string;
@@ -256,12 +299,17 @@ function EditField({
   readOnly?:    boolean;
   hint?:        string;
   placeholder?: string;
+  /** Optional inline action element (e.g. an "Edit linked account" link) */
+  action?:      React.ReactNode;
 }) {
   return (
     <div>
-      <label className="block text-[10.5px] uppercase tracking-wide text-nurock-slate mb-0.5">
-        {label}
-      </label>
+      <div className="flex items-baseline justify-between gap-2 mb-0.5">
+        <label className="block text-[10.5px] uppercase tracking-wide text-nurock-slate">
+          {label}
+        </label>
+        {action}
+      </div>
       <input
         type="text"
         name={name}

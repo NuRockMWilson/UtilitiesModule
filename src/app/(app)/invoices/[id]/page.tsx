@@ -221,6 +221,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
               raw_extraction:         invoice.raw_extraction,
               vendor_name:            (invoice.vendor as any)?.name ?? null,
               utility_account_number: (invoice.utility_account as any)?.account_number ?? null,
+              utility_account_id:     invoice.utility_account_id ?? null,
               fields_edited:          (logEntries ?? []).some((e: any) => e.action === "fields_edited" || e.action === "fields_edited_historical"),
               is_historical:          typeof invoice.source_reference === "string" && invoice.source_reference.startsWith("historical-"),
             } satisfies EditableInvoice}

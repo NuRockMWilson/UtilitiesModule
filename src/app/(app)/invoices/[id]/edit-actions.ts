@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { computeVariance } from "@/lib/variance";
+import { parseUserDate } from "@/lib/dates";
 
 export type EditFieldsResult = {
   ok: boolean;
@@ -59,15 +60,13 @@ function coerce(col: EditableColumn, raw: string): { value: string | number | nu
     case "due_date":
     case "service_period_start":
     case "service_period_end": {
-      // Accept YYYY-MM-DD only; Postgres tolerates this directly.
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-        return { value: null, error: `${col} must be YYYY-MM-DD, got "${raw}"` };
+      // Accept many human-friendly formats: M/D/YYYY, MMDDYYYY, M/D/YY,
+      // YYYY-MM-DD, etc. parseUserDate normalizes to ISO before save.
+      const iso = parseUserDate(trimmed);
+      if (!iso) {
+        return { value: null, error: `${col} is not a valid date: "${raw}". Try M/D/YYYY (e.g. 4/28/2026).` };
       }
-      const d = new Date(`${trimmed}T00:00:00`);
-      if (Number.isNaN(d.getTime())) {
-        return { value: null, error: `${col} is not a valid date: "${raw}"` };
-      }
-      return { value: trimmed };
+      return { value: iso };
     }
     case "gl_coding": {
       // Format: 500-XXX-XXXX.YY — soft validation; allow any non-empty string
