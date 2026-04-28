@@ -49,6 +49,18 @@ export interface PerAccountMonthlyGridProps {
     /** Map of "accountId:month" → ExistingNote[] */
     notesByCell: Map<string, ExistingNote[]>;
   };
+  /**
+   * When the data displayed includes any month at or before April 2026,
+   * a disclaimer banner is shown below the table noting that pre-May-2026
+   * amounts come from the legacy spreadsheet detail tabs and may not
+   * reconcile exactly to the legacy Summary tab roll-ups. Migration 0015
+   * loaded these as "posted to Sage" historical baselines.
+   *
+   * Pass the year displayed by the grid; the banner is rendered when
+   * `year < 2026` or `year === 2026 && currentMonth < 5` (i.e. anywhere
+   * up through and including April 2026).
+   */
+  historicalDisclaimerYear?: number;
 }
 
 export function PerAccountMonthlyGrid({
@@ -59,6 +71,7 @@ export function PerAccountMonthlyGrid({
   middleHeader = "Description",
   showCategory = false,
   noteAnchor,
+  historicalDisclaimerYear,
 }: PerAccountMonthlyGridProps) {
   // Sort accounts by category + description for stable ordering
   const sortedAccounts = [...accounts].sort((a, b) => {
@@ -207,6 +220,42 @@ export function PerAccountMonthlyGrid({
           </tfoot>
         )}
       </table>
+      {historicalDisclaimerYear !== undefined &&
+        historicalDisclaimerYear < 2026 && (
+          <HistoricalDisclaimer year={historicalDisclaimerYear} />
+        )}
+      {historicalDisclaimerYear === 2026 && (
+        <HistoricalDisclaimer year={2026} onlyEarlyMonths />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Banner shown beneath the grid when any displayed amount comes from
+ * migration 0015's per-meter historical baseline. These amounts were
+ * extracted from the legacy spreadsheet detail tabs and may not exactly
+ * tie to the Summary tab roll-ups. Live invoice data starts May 2026.
+ */
+function HistoricalDisclaimer({ year, onlyEarlyMonths }: { year?: number; onlyEarlyMonths?: boolean }) {
+  return (
+    <div className="border-t border-nurock-tan/40 bg-nurock-tan/10 px-4 py-3 text-[12px] text-nurock-slate-dark leading-relaxed">
+      <span className="font-semibold text-nurock-navy">Historical data note: </span>
+      {onlyEarlyMonths ? (
+        <>
+          Amounts shown for January through April 2026 were sourced from the
+          legacy spreadsheet per-meter detail tabs and may not reconcile exactly
+          to the legacy Summary tab roll-ups. From May 2026 forward, every
+          amount on this page comes directly from a processed invoice.
+        </>
+      ) : (
+        <>
+          Amounts shown for {year ?? "this period"} were sourced from the legacy
+          spreadsheet per-meter detail tabs and may not reconcile exactly to the
+          legacy Summary tab roll-ups. From May 2026 forward, every amount on
+          this page comes directly from a processed invoice.
+        </>
+      )}
     </div>
   );
 }

@@ -229,6 +229,8 @@ export default async function TrashDetailPage({
                   leftHeader="Account #"
                   middleHeader="Description"
                   noteAnchor={{ property_id: property.id, year, notesByCell }}
+                
+                  historicalDisclaimerYear={year}
                 />
               </section>
 

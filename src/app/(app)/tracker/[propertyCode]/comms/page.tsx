@@ -220,7 +220,9 @@ export default async function CommsDetailPage({
                     leftHeader="Account #"
                     middleHeader="Vendor / Description"
                     noteAnchor={{ property_id: property.id, year, notesByCell }}
-                  />
+                  
+                  historicalDisclaimerYear={year}
+                />
                 </section>
               )}
 
@@ -236,7 +238,9 @@ export default async function CommsDetailPage({
                     leftHeader="Account #"
                     middleHeader="Vendor / Description"
                     noteAnchor={{ property_id: property.id, year, notesByCell }}
-                  />
+                  
+                  historicalDisclaimerYear={year}
+                />
                 </section>
               )}
 

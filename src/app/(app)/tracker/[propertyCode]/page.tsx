@@ -251,6 +251,26 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
           Amounts reflect approved, posted, and paid invoices. Pending and rejected invoices are excluded.
           Per-unit and occupancy-adjusted views are available on the Water detail page.
         </p>
+        {(year < 2026 || year === 2026) && (
+          <div className="mt-4 border-t border-nurock-tan/40 bg-nurock-tan/10 px-4 py-3 rounded-md text-[12px] text-nurock-slate-dark leading-relaxed">
+            <span className="font-semibold text-nurock-navy">Historical data note: </span>
+            {year < 2026 ? (
+              <>
+                Amounts shown for {year} were sourced from the legacy spreadsheet
+                per-meter detail tabs and may not reconcile exactly to the legacy
+                Summary tab roll-ups. From May 2026 forward, every amount on this
+                page comes directly from a processed invoice.
+              </>
+            ) : (
+              <>
+                Amounts shown for January through April 2026 were sourced from the
+                legacy spreadsheet per-meter detail tabs and may not reconcile
+                exactly to the legacy Summary tab roll-ups. From May 2026 forward,
+                every amount on this page comes directly from a processed invoice.
+              </>
+            )}
+          </div>
+        )}
       </div>
     </>
   );

@@ -240,7 +240,9 @@ export default async function WaterDetailPage({
                 leftHeader="Account #"
                 middleHeader="Description"
                 noteAnchor={{ property_id: property.id, year, notesByCell }}
-              />
+              
+                  historicalDisclaimerYear={year}
+                />
             </section>
           )}
 
@@ -256,7 +258,9 @@ export default async function WaterDetailPage({
                 leftHeader="Account #"
                 middleHeader="Description"
                 noteAnchor={{ property_id: property.id, year, notesByCell }}
-              />
+              
+                  historicalDisclaimerYear={year}
+                />
             </section>
           )}
 
@@ -272,7 +276,9 @@ export default async function WaterDetailPage({
                 leftHeader="Account #"
                 middleHeader="Description"
                 noteAnchor={{ property_id: property.id, year, notesByCell }}
-              />
+              
+                  historicalDisclaimerYear={year}
+                />
             </section>
           )}
 

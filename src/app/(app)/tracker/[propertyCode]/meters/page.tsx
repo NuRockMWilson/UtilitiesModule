@@ -235,6 +235,8 @@ export default async function MetersDetailPage({
                   middleHeader="Meter / Description"
                   showCategory
                   noteAnchor={{ property_id: property.id, year, notesByCell }}
+                
+                  historicalDisclaimerYear={year}
                 />
               </section>
 
