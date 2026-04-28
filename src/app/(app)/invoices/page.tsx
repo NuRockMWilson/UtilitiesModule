@@ -24,12 +24,20 @@ export default async function InvoicesPage({ searchParams }: Props) {
   const supabase = createSupabaseServerClient();
 
   // PostgREST caps every API request at ~1000 rows regardless of `.limit()`,
-  // so a single fetch can never see the full historical baseline. We page
-  // through in chunks of 1000 with `.range()` and stop once we've either
-  // gotten everything or hit a sane upper bound. The bound exists so a bad
-  // filter doesn't accidentally pull a million rows on every page load.
+  // so a single fetch can never see the full historical baseline. The strategy:
+  //   1. Run a HEAD count query to find out exactly how many rows match.
+  //   2. Fire all pages in parallel via Promise.all (one request per 1000 rows).
+  //   3. Merge the results.
+  // This is fast because the round-trips happen concurrently, and complete
+  // because we know up-front how many pages to ask for.
+  //
+  // The ORDER BY needs a stable tiebreaker. Without one, rows with the same
+  // submitted_at (which is most of the historical baseline — every January
+  // invoice shares 2026-01-15) end up in non-deterministic positions and
+  // some rows show up in two pages while others show up in none. Adding
+  // `id ASC` as a secondary sort guarantees deterministic windows.
   const PAGE_SIZE = 1000;
-  const MAX_ROWS  = 25_000;
+  const MAX_ROWS  = 50_000;
 
   function buildQuery() {
     let q = supabase
@@ -41,7 +49,8 @@ export default async function InvoicesPage({ searchParams }: Props) {
         vendor:vendors(id, name),
         gl:gl_accounts(code, description)
       `)
-      .order("submitted_at", { ascending: false });
+      .order("submitted_at", { ascending: false })
+      .order("id",            { ascending: true });    // stable tiebreaker
     if (searchParams.status) q = q.eq("status", searchParams.status as InvoiceStatus);
     const propertyFilter = searchParams.propertyId ?? searchParams.property;
     if (propertyFilter) q = q.eq("property_id", propertyFilter);
@@ -54,15 +63,35 @@ export default async function InvoicesPage({ searchParams }: Props) {
     return q;
   }
 
+  // Step 1: How many rows match? Cheap HEAD request.
+  let countQuery = supabase
+    .from("invoices")
+    .select("id", { count: "exact", head: true });
+  if (searchParams.status) countQuery = countQuery.eq("status", searchParams.status as InvoiceStatus);
+  const propertyFilter = searchParams.propertyId ?? searchParams.property;
+  if (propertyFilter) countQuery = countQuery.eq("property_id", propertyFilter);
+  if (searchParams.flagged === "true") countQuery = countQuery.eq("variance_flagged", true);
+  if (searchParams.due === "soon") {
+    const threeDays = new Date();
+    threeDays.setDate(threeDays.getDate() + 3);
+    countQuery = countQuery.lte("due_date", threeDays.toISOString().slice(0, 10));
+  }
+  const { count } = await countQuery;
+  const totalRows = Math.min(count ?? 0, MAX_ROWS);
+
+  // Step 2: Build all the page requests up front and fire them in parallel.
+  const numPages = Math.ceil(totalRows / PAGE_SIZE);
+  const pageRequests = Array.from({ length: numPages }, (_, i) =>
+    buildQuery().range(i * PAGE_SIZE, (i + 1) * PAGE_SIZE - 1),
+  );
+  const pageResults = await Promise.all(pageRequests);
+
+  // Step 3: Merge.
   const rows: any[] = [];
   let error: { message: string } | null = null;
-  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-    const { data, error: pageErr } = await buildQuery().range(from, from + PAGE_SIZE - 1);
-    if (pageErr) { error = pageErr; break; }
-    if (!data || data.length === 0) break;
-    rows.push(...data);
-    // Short page → no more rows beyond this. Stop early to save round-trips.
-    if (data.length < PAGE_SIZE) break;
+  for (const r of pageResults) {
+    if (r.error) { error = r.error; break; }
+    if (r.data) rows.push(...r.data);
   }
 
   return (
