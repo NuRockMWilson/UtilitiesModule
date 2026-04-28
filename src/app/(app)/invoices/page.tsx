@@ -33,7 +33,7 @@ export default async function InvoicesPage({ searchParams }: Props) {
       gl:gl_accounts(code, description)
     `)
     .order("submitted_at", { ascending: false })
-    .limit(200);
+    .limit(5000);
 
   if (searchParams.status) query = query.eq("status", searchParams.status as InvoiceStatus);
   const propertyFilter = searchParams.propertyId ?? searchParams.property;
@@ -50,7 +50,7 @@ export default async function InvoicesPage({ searchParams }: Props) {
 
   return (
     <>
-      <TopBar title="Invoices" subtitle={`${rows.length} shown`} />
+      <TopBar title="Invoices" subtitle={`${rows.length.toLocaleString()} loaded · search & filter below`} />
 
       <div className="px-8 py-4 border-b border-nurock-border bg-white">
         <div className="flex items-center gap-2 flex-wrap">
