@@ -26,11 +26,13 @@ export function AttachPdfButton({ invoiceId, hasExistingPdf }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function handleClick() {
     setError(null);
+    setSuccess(null);
     if (hasExistingPdf && !confirmReplace) {
       setConfirmReplace(true);
       return;
@@ -42,6 +44,7 @@ export function AttachPdfButton({ invoiceId, hasExistingPdf }: Props) {
     const file = e.target.files?.[0];
     if (!file) return;
     setError(null);
+    setSuccess(null);
 
     startTransition(async () => {
       const fd = new FormData();
@@ -53,15 +56,17 @@ export function AttachPdfButton({ invoiceId, hasExistingPdf }: Props) {
         });
         const data = await res.json();
         if (!res.ok) {
-          setError(data.error ?? "Upload failed");
+          setError(data.error ?? `Upload failed (HTTP ${res.status})`);
           return;
         }
         setConfirmReplace(false);
+        setSuccess(`Attached "${file.name}"`);
         router.refresh();
+        // Clear success message after a moment so it doesn't linger
+        setTimeout(() => setSuccess(null), 4000);
       } catch (err) {
-        setError((err as Error).message);
+        setError((err as Error).message ?? "Network error during upload");
       } finally {
-        // Reset the input so the same file can be re-selected if needed
         if (inputRef.current) inputRef.current.value = "";
       }
     });
@@ -107,6 +112,9 @@ export function AttachPdfButton({ invoiceId, hasExistingPdf }: Props) {
       </div>
       {error && (
         <div className="text-[11px] text-flag-red">{error}</div>
+      )}
+      {success && (
+        <div className="text-[11px] text-flag-green">✓ {success}</div>
       )}
     </div>
   );

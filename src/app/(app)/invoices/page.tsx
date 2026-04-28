@@ -33,7 +33,7 @@ export default async function InvoicesPage({ searchParams }: Props) {
       gl:gl_accounts(code, description)
     `)
     .order("submitted_at", { ascending: false })
-    .limit(5000);
+    .limit(25000);
 
   if (searchParams.status) query = query.eq("status", searchParams.status as InvoiceStatus);
   const propertyFilter = searchParams.propertyId ?? searchParams.property;

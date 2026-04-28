@@ -71,6 +71,7 @@ export function EditableBillDetails({ invoice }: { invoice: EditableInvoice }) {
   const [editing, setEditing] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const canEdit = canEditInvoice(invoice);
   const raw     = invoice.raw_extraction ?? {};
@@ -78,16 +79,43 @@ export function EditableBillDetails({ invoice }: { invoice: EditableInvoice }) {
   function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
+    setSuccessMessage(null);
     const fd = new FormData(e.currentTarget);
     fd.set("invoice_id", invoice.id);
+
+    // Capture which fields were actually changed by the user so we can
+    // tell them in the success message. Compare each form value against
+    // the value rendered on the form when it opened.
+    const changedFields: string[] = [];
+    for (const [key, value] of fd.entries()) {
+      if (key === "invoice_id") continue;
+      const stringValue = typeof value === "string" ? value : "";
+      const original = (invoice as any)[key];
+      const originalString = original == null ? "" : String(original);
+      // Date fields render in M/D/YYYY but compare against ISO; let the server
+      // be the source of truth for these. We just want a rough "did anything
+      // change" hint for the success toast.
+      if (stringValue.trim() !== originalString.trim()) {
+        changedFields.push(key);
+      }
+    }
+
     startTransition(async () => {
       const r = await editInvoiceFields(fd);
       if (!r.ok) {
         setError(r.error ?? "Save failed");
-      } else {
-        setEditing(false);
-        router.refresh();
+        return;
       }
+      setEditing(false);
+      // Always show feedback so users know the click registered. If they
+      // didn't change anything, say so explicitly rather than fail silently.
+      setSuccessMessage(
+        changedFields.length > 0
+          ? `Saved — updated ${changedFields.length} field${changedFields.length === 1 ? "" : "s"}`
+          : "No changes to save",
+      );
+      router.refresh();
+      setTimeout(() => setSuccessMessage(null), 4000);
     });
   }
 
@@ -126,6 +154,12 @@ export function EditableBillDetails({ invoice }: { invoice: EditableInvoice }) {
           <StatusPill status={invoice.status} />
         </div>
       </div>
+
+      {successMessage && (
+        <div className="mb-3 text-[12.5px] text-flag-green bg-flag-green-bg border border-green-200 rounded-md px-3 py-2">
+          ✓ {successMessage}
+        </div>
+      )}
 
       {!editing ? (
         <ReadOnlyView invoice={invoice} />
