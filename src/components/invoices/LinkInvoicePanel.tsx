@@ -4,6 +4,7 @@ import { useState, useTransition, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { linkInvoice } from "@/app/(app)/invoices/[id]/link-actions";
 import { Combobox, type ComboboxOption } from "@/components/ui/Combobox";
+import { displayPropertyName } from "@/lib/property-display";
 
 type Property = { id: string; code: string; name: string; full_code?: string | null };
 type Vendor   = { id: string; name: string };
@@ -191,7 +192,8 @@ export function LinkInvoicePanel({
                   placeholder="Type code or name…"
                   options={properties.map((p): ComboboxOption => ({
                     value:  p.id,
-                    label:  `${p.full_code ?? p.code} · ${p.name}`,
+                    label:  displayPropertyName(p.name),
+                    // Keep code searchable so users can still find by code if needed
                     search: `${p.code} ${p.full_code ?? ""} ${p.name}`,
                   }))}
                   onValueChange={setSelectedPropertyId}

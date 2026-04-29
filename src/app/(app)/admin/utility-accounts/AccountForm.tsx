@@ -3,6 +3,7 @@
 import { useFormState, useFormStatus } from "react-dom";
 import Link from "next/link";
 import { saveAccount, type AccountFormState } from "./actions";
+import { displayPropertyName } from "@/lib/property-display";
 
 export type AccountFormValues = {
   id?:                       string;
@@ -52,7 +53,7 @@ export function AccountForm({
             <option value="">— select —</option>
             {properties.map(p => (
               <option key={p.id} value={p.id}>
-                {p.full_code ? `${p.full_code} · ${p.name}` : `${p.code} · ${p.name}`}
+                {displayPropertyName(p.name)}
               </option>
             ))}
           </select>

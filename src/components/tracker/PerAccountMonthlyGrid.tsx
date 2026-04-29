@@ -74,16 +74,17 @@ export function PerAccountMonthlyGrid({
   historicalDisclaimerYear,
 }: PerAccountMonthlyGridProps) {
   // Sort accounts by category + description for stable ordering
-  const sortedAccounts = [...accounts].sort((a, b) => {
+  const allAccounts = [...accounts].sort((a, b) => {
     const catCmp = (a.category ?? "").localeCompare(b.category ?? "");
     if (catCmp !== 0) return catCmp;
     return (a.description ?? "").localeCompare(b.description ?? "");
   });
 
-  // Monthly and YTD per account
+  // Monthly and YTD per account — computed across ALL accounts so that
+  // filtering for empty rows below doesn't lose data we'd otherwise need.
   const ytdByAccount = new Map<string, number>();
   const monthlyByAccount = new Map<string, (number | null)[]>();
-  for (const a of sortedAccounts) {
+  for (const a of allAccounts) {
     const map = amountsByAccountMonth.get(a.id) ?? {};
     const monthly = new Array(12).fill(null) as (number | null)[];
     let ytd = 0;
@@ -96,6 +97,14 @@ export function PerAccountMonthlyGrid({
     monthlyByAccount.set(a.id, monthly);
     ytdByAccount.set(a.id, ytd);
   }
+
+  // Hide accounts where every column would render as a dash. Keeps the
+  // grid focused on rows that actually have activity in this period.
+  // Accounts with even one month of data still show — only fully-empty
+  // rows are suppressed.
+  const sortedAccounts = allAccounts.filter(
+    a => (ytdByAccount.get(a.id) ?? 0) > 0,
+  );
 
   // Column totals across all accounts
   const colTotals = new Array(12).fill(0);

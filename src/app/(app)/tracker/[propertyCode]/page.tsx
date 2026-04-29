@@ -6,6 +6,7 @@ import { formatDollars, formatNumber, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { NoteCell, type ExistingNote } from "@/components/tracker/NoteCell";
+import { displayPropertyName } from "@/lib/property-display";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -91,13 +92,20 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
     budgetByGL.set(b.gl_account_id, (budgetByGL.get(b.gl_account_id) ?? 0) + Number(b.amount));
   }
 
-  const rows = (glAccounts ?? []).map(gl => {
+  const allRows = (glAccounts ?? []).map(gl => {
     const monthly = MONTHS.map((_, i) => actualsByGLMonth.get(gl.id)?.get(i + 1) ?? 0);
     const ytd = monthly.reduce((a, b) => a + b, 0);
     const budget = budgetByGL.get(gl.id) ?? 0;
     const variance = budget > 0 ? ((ytd - budget) / budget) * 100 : null;
     return { gl, monthly, ytd, budget, variance };
   });
+
+  // Hide rows where every column would render as a dash (no actuals AND no
+  // budget). Keeps the summary visually compact — properties with only a
+  // handful of active GL categories don't show 12 GLs of dashes.
+  const rows = allRows.filter(r =>
+    r.ytd > 0 || r.budget > 0 || r.monthly.some(v => v > 0),
+  );
 
   const totals = {
     monthly: MONTHS.map((_, i) => rows.reduce((a, r) => a + r.monthly[i], 0)),
@@ -109,7 +117,7 @@ export default async function PropertyTrackerPage({ params, searchParams }: Prop
   return (
     <>
       <TopBar
-        title={`${property.code} · ${property.name}`}
+        title={displayPropertyName(property.name)}
         subtitle={`${property.state}${property.unit_count ? ` · ${property.unit_count} units` : ""} · Sage: ${property.sage_system === "sage_intacct" ? "Intacct" : "300 CRE"}`}
       />
 

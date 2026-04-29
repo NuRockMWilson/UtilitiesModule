@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { deactivateAccount, reactivateAccount } from "./actions";
+import { displayPropertyName } from "@/lib/property-display";
 
 interface PageProps {
   searchParams: { property?: string };
@@ -77,7 +78,7 @@ export default async function AdminAccountsPage({ searchParams }: PageProps) {
               <option value="">All properties ({rows.length} accounts shown)</option>
               {(properties ?? []).map(p => (
                 <option key={p.id} value={p.id}>
-                  {p.code} · {p.name}
+                  {displayPropertyName(p.name)}
                 </option>
               ))}
             </select>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { displayPropertyName } from "@/lib/property-display";
 
 /**
  * Property scope filter for the dashboard. Default is "All properties".
@@ -49,7 +50,7 @@ export function DashboardPropertyPicker({
         <option value="">All properties</option>
         {properties.map(p => (
           <option key={p.id} value={p.id}>
-            {p.full_code ? `${p.full_code} · ${p.name}` : `${p.code} · ${p.name}`}
+            {displayPropertyName(p.name)}
           </option>
         ))}
       </select>

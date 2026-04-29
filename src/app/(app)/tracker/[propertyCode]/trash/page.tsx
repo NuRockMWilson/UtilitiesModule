@@ -5,6 +5,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars, formatPercent } from "@/lib/format";
 import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
+import { displayPropertyName } from "@/lib/property-display";
 
 /**
  * Trash / Garbage detail page. Per-account monthly grid for GL 5135.
@@ -147,7 +148,7 @@ export default async function TrashDetailPage({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <TopBar
-        title={`${property.name} · Trash`}
+        title={`${displayPropertyName(property.name)} · Trash`}
         subtitle={`${property.full_code} · ${accounts.length} ${accounts.length === 1 ? "account" : "accounts"} · ${year} YTD ${formatDollars(ytdTotal)}`}
       />
 

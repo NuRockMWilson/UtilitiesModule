@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { formatDate, formatDollars, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { VarianceRecomputeButton } from "@/components/admin/VarianceRecomputeButton";
+import { displayPropertyName } from "@/lib/property-display";
 
 export default async function VarianceInquiriesPage() {
   const supabase = createSupabaseServerClient();
@@ -46,7 +47,7 @@ export default async function VarianceInquiriesPage() {
                     href={`/invoices/${q.invoice?.id}`}
                     className="font-medium text-nurock-black hover:underline"
                   >
-                    {q.invoice?.property?.code} · {q.invoice?.property?.name}
+                    {displayPropertyName(q.invoice?.property?.name)}
                   </Link>
                   <span className="text-xs text-nurock-slate">· {q.invoice?.vendor?.name}</span>
                 </div>

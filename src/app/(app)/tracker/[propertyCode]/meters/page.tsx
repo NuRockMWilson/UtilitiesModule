@@ -5,6 +5,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars, formatPercent } from "@/lib/format";
 import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
+import { displayPropertyName } from "@/lib/property-display";
 
 /**
  * House Meters detail page. Shows every electric meter at the property with
@@ -161,7 +162,7 @@ export default async function MetersDetailPage({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <TopBar
-        title={`${property.name} · House meters`}
+        title={`${displayPropertyName(property.name)} · House meters`}
         subtitle={`${property.full_code} · ${accounts.length} meters · ${year} YTD ${formatDollars(propertyYtd)}`}
       />
 

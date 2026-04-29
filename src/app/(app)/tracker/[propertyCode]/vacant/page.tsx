@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/layout/TopBar";
 import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars } from "@/lib/format";
+import { displayPropertyName } from "@/lib/property-display";
 
 /**
  * Vacant Units detail page. Shows per-unit, per-month electric costs absorbed
@@ -118,7 +119,7 @@ export default async function VacantUnitsPage({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <TopBar
-        title={`${property.name} · Vacant units`}
+        title={`${displayPropertyName(property.name)} · Vacant units`}
         subtitle={`${property.full_code} · ${ytdUnitsHit} units vacant in ${year} · ${formatDollars(ytdTotal)} absorbed`}
       />
 

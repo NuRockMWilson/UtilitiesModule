@@ -5,6 +5,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars } from "@/lib/format";
 import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
+import { displayPropertyName } from "@/lib/property-display";
 
 /**
  * Combined Phone + Cable detail page. Per-account monthly grid for both
@@ -147,7 +148,7 @@ export default async function CommsDetailPage({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <TopBar
-        title={`${property.name} · Phone & Cable`}
+        title={`${displayPropertyName(property.name)} · Phone & Cable`}
         subtitle={`${property.full_code} · ${allAccounts.length} accounts · ${year} YTD ${formatDollars(totalYtd)}`}
       />
 

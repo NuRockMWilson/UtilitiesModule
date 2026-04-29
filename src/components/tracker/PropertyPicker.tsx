@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter, usePathname } from "next/navigation";
+import { displayPropertyName } from "@/lib/property-display";
 
 export type PropertyOption = {
   code:     string;
@@ -52,7 +53,7 @@ export function PropertyPicker({
     >
       {properties.map(p => (
         <option key={p.code} value={p.code}>
-          {p.full_code ? `${p.full_code} · ${p.name}` : `${p.code} · ${p.name}`}
+          {displayPropertyName(p.name)}
         </option>
       ))}
     </select>

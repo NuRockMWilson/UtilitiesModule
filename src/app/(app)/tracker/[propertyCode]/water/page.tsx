@@ -5,6 +5,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars } from "@/lib/format";
 import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
+import { displayPropertyName } from "@/lib/property-display";
 
 /**
  * Water detail page. Shows every water/sewer/irrigation/stormwater account
@@ -171,7 +172,7 @@ export default async function WaterDetailPage({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <TopBar
-        title={`${property.name} · Water detail`}
+        title={`${displayPropertyName(property.name)} · Water detail`}
         subtitle={`${property.full_code} · ${accounts.length} accounts · ${year} YTD ${formatDollars(totalYtd)}`}
       />
 
