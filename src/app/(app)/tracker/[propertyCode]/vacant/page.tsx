@@ -7,14 +7,32 @@ import { formatDollars } from "@/lib/format";
 import { displayPropertyName } from "@/lib/property-display";
 
 /**
- * Vacant Units detail page. Shows per-unit, per-month electric costs absorbed
- * during vacancy periods (GL 5114).
+ * Vacant Units detail page (GL 5114). Shows per-unit, per-month electric
+ * costs absorbed during vacancy periods.
  *
- * For LIHTC operators, the most operationally relevant views are:
- *   1. Monthly totals — how much vacancy cost is the property carrying this year?
- *   2. Units with ongoing costs — which units have been vacant >1 month recently?
- *   3. The full per-unit grid — which specific units contributed?
+ * Data flow: utility_accounts under GL 5114 + invoices linked to those UAs.
+ * One UA per Sage account number — for properties that bill each vacant
+ * unit on its own account (e.g. Walton Reserve), each UA's description is
+ * the unit number ("1213"). For properties with one master account billing
+ * many units (e.g. Onion Creek's "27104 80000"), the UA represents the whole
+ * master rollup — per-unit detail isn't preserved in invoices.
+ *
+ * Earlier this page read from a separate `vacant_unit_charges` table that
+ * was populated inconsistently. Refactored to read invoices directly so it
+ * matches what the property summary view (v_property_summary) sums.
  */
+
+type UnitRow = {
+  unit_label:    string;        // ua.description (unit number) or fallback
+  account_number: string;
+  meter_id:      string | null;
+  monthly:       (number | null)[];  // 12 entries, null = no charge
+  months_vacant: number;
+  ytd:           number;
+};
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 export default async function VacantUnitsPage({
   params,
   searchParams,
@@ -39,82 +57,105 @@ export default async function VacantUnitsPage({
 
   const year = searchParams.year ? parseInt(searchParams.year, 10) : new Date().getFullYear();
 
-  // All vacant charges for this property, any year (we'll filter client-side)
-  const { data: charges } = await supabase
-    .from("vacant_unit_charges")
-    .select("unit_number, building_number, meter_id, year, month, amount, source")
-    .eq("property_id", property.id)
-    .order("unit_number", { ascending: true })
-    .order("year", { ascending: false })
-    .order("month", { ascending: true });
+  // Resolve GL 5114 (Vacant Units electric) ID
+  const { data: glRow } = await supabase
+    .from("gl_accounts")
+    .select("id")
+    .eq("code", "5114")
+    .single();
+  const gl5114Id = glRow?.id;
 
-  const allCharges = (charges ?? []).map((c: any) => ({
-    unit_number:     String(c.unit_number),
-    building_number: c.building_number as string | null,
-    meter_id:        c.meter_id as string | null,
-    year:            Number(c.year),
-    month:           Number(c.month),
-    amount:          Number(c.amount),
+  // All vacant-electric utility accounts at this property
+  const { data: acctRaw } = gl5114Id
+    ? await supabase
+        .from("utility_accounts")
+        .select("id, account_number, description, meter_id")
+        .eq("property_id", property.id)
+        .eq("gl_account_id", gl5114Id)
+    : { data: [] };
+
+  const accounts = (acctRaw ?? []).map((a: any) => ({
+    id:             a.id as string,
+    account_number: a.account_number as string,
+    description:    a.description as string | null,
+    meter_id:       a.meter_id as string | null,
+  }));
+  const accountIds = accounts.map(a => a.id);
+
+  // All historical + live invoices on those UAs
+  const { data: invRaw } = accountIds.length
+    ? await supabase
+        .from("invoices")
+        .select("utility_account_id, invoice_date, service_period_end, total_amount_due")
+        .in("utility_account_id", accountIds)
+    : { data: [] };
+
+  const invoices = (invRaw ?? []).map((i: any) => ({
+    account_id: i.utility_account_id as string,
+    date:       (i.service_period_end ?? i.invoice_date) as string | null,
+    amount:     Number(i.total_amount_due ?? 0),
   }));
 
-  const currentYearCharges = allCharges.filter(c => c.year === year);
+  const years = Array.from(new Set(
+    invoices.map(i => i.date ? parseInt(i.date.substring(0, 4), 10) : null)
+           .filter((y): y is number => y !== null)
+  )).sort((a, b) => b - a);
+  if (!years.includes(year)) years.unshift(year);
 
-  // Available years for the year picker
-  const years = Array.from(new Set(allCharges.map(c => c.year))).sort((a, b) => b - a);
-
-  // Build a { unit: { month: amount } } table for the selected year
-  type UnitRow = {
-    unit_number:     string;
-    building_number: string | null;
-    monthly:         (number | null)[];  // 12 entries, null = no charge
-    months_vacant:   number;
-    ytd:             number;
-  };
+  // Build per-unit rows for the selected year
   const unitMap = new Map<string, UnitRow>();
-  for (const c of currentYearCharges) {
-    const key = c.unit_number;
-    if (!unitMap.has(key)) {
-      unitMap.set(key, {
-        unit_number:     c.unit_number,
-        building_number: c.building_number,
-        monthly:         new Array(12).fill(null),
-        months_vacant:   0,
-        ytd:             0,
-      });
-    }
-    const row = unitMap.get(key)!;
-    row.monthly[c.month - 1] = (row.monthly[c.month - 1] ?? 0) + c.amount;
-    row.ytd += c.amount;
+  for (const a of accounts) {
+    unitMap.set(a.id, {
+      unit_label:     a.description?.trim() || a.account_number,
+      account_number: a.account_number,
+      meter_id:       a.meter_id,
+      monthly:        new Array(12).fill(null),
+      months_vacant:  0,
+      ytd:            0,
+    });
+  }
+  for (const inv of invoices) {
+    if (!inv.date) continue;
+    const y = parseInt(inv.date.substring(0, 4), 10);
+    if (y !== year) continue;
+    const m = parseInt(inv.date.substring(5, 7), 10);
+    const row = unitMap.get(inv.account_id);
+    if (!row) continue;
+    row.monthly[m - 1] = (row.monthly[m - 1] ?? 0) + inv.amount;
+    row.ytd += inv.amount;
   }
   for (const row of unitMap.values()) {
     row.months_vacant = row.monthly.filter(v => v !== null && v > 0).length;
   }
 
-  // Sort units: most months-vacant first, then by highest YTD
-  const units = Array.from(unitMap.values()).sort((a, b) => {
+  // Sort: most months-vacant first, then biggest YTD
+  const allUnits = Array.from(unitMap.values()).sort((a, b) => {
     if (b.months_vacant !== a.months_vacant) return b.months_vacant - a.months_vacant;
     return b.ytd - a.ytd;
   });
+  // Hide units with zero activity in the selected year (consistent with the
+  // tracker's "hide all-empty rows" behavior elsewhere).
+  const units = allUnits.filter(u => u.ytd > 0);
 
-  // Monthly rollup — "how much vacancy cost hit the property in each month"
+  // Monthly rollup across the property
   const monthlyRollup: Array<{ month: number; units: number; amount: number }> = [];
   for (let m = 1; m <= 12; m++) {
-    const monthCharges = currentYearCharges.filter(c => c.month === m);
-    monthlyRollup.push({
-      month:  m,
-      units:  new Set(monthCharges.map(c => c.unit_number)).size,
-      amount: monthCharges.reduce((s, c) => s + c.amount, 0),
-    });
+    let unitsHit = 0;
+    let amount = 0;
+    for (const u of units) {
+      const v = u.monthly[m - 1];
+      if (v !== null && v > 0) {
+        unitsHit++;
+        amount += v;
+      }
+    }
+    monthlyRollup.push({ month: m, units: unitsHit, amount });
   }
 
-  const ytdTotal     = currentYearCharges.reduce((s, c) => s + c.amount, 0);
-  const ytdUnitsHit  = unitMap.size;
+  const ytdTotal     = units.reduce((s, u) => s + u.ytd, 0);
+  const ytdUnitsHit  = units.length;
   const worstMonth   = monthlyRollup.reduce((m, x) => x.amount > m.amount ? x : m, monthlyRollup[0]);
-
-  // Longest vacancy streak — units where months_vacant >= 3
   const chronicVacancies = units.filter(u => u.months_vacant >= 3).length;
-
-  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -159,18 +200,18 @@ export default async function VacantUnitsPage({
 
       <div className="flex-1 overflow-auto bg-nurock-bg">
         <div className="px-8 py-6">
-          {currentYearCharges.length === 0 && (
+          {ytdTotal === 0 ? (
             <div className="card p-8 text-center">
               <div className="text-nurock-navy font-medium mb-2">No vacant-unit charges on file for {year}</div>
               <div className="text-sm text-nurock-slate">
-                {allCharges.length > 0
-                  ? "Pick a different year above — this property has historical vacancy data."
-                  : "No vacancy cost records yet. Historical data imports from the legacy Vacant Units sheet; new allocations flow in as vacant-unit bills are processed."}
+                {allUnits.length > 0
+                  ? "This property has historical vacancy data — pick a different year above."
+                  : accounts.length > 0
+                    ? `${accounts.length} vacant-unit account${accounts.length === 1 ? "" : "s"} on file but no invoices in ${year}.`
+                    : "No vacant-unit accounts set up for this property yet."}
               </div>
             </div>
-          )}
-
-          {currentYearCharges.length > 0 && (
+          ) : (
             <>
               {/* KPI cards */}
               <div className="grid grid-cols-4 gap-4 mb-6">
@@ -227,71 +268,54 @@ export default async function VacantUnitsPage({
                 <table className="w-full text-sm">
                   <thead className="bg-nurock-bg text-nurock-slate text-xs uppercase tracking-wide">
                     <tr>
-                      <th className="cell-head sticky left-0 z-10">
-                        Unit
-                      </th>
-                      <th className="cell-head">Building</th>
-                      <th className="cell-head text-right">Months vacant</th>
+                      <th className="cell-head sticky left-0 z-10 bg-nurock-bg">Unit</th>
+                      <th className="cell-head text-left">Account</th>
+                      <th className="cell-head text-center">Months vacant</th>
                       {MONTHS.map(m => (
                         <th key={m} className="cell-head text-right">{m}</th>
                       ))}
-                      <th className="px-3 py-2 text-right font-medium bg-nurock-flag-navy-bg">YTD</th>
+                      <th className="cell-head text-right bg-[#FAFBFC]">YTD</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-nurock-border">
-                    {units.map(u => (
-                      <tr key={u.unit_number} className="hover:bg-nurock-bg">
-                        <td className="cell sticky left-0 bg-white z-10 font-medium">
-                          {u.unit_number}
+                  <tbody>
+                    {units.map((u, i) => (
+                      <tr key={`${u.account_number}-${i}`} className="border-b border-nurock-border last:border-b-0 table-row">
+                        <td className="cell sticky left-0 bg-white z-10 font-medium text-nurock-black">
+                          {u.unit_label}
                         </td>
-                        <td className="px-3 py-2 text-xs text-nurock-slate">
-                          {u.building_number ?? "—"}
+                        <td className="cell text-left text-nurock-slate">
+                          <span className="code">{u.account_number}</span>
+                          {u.meter_id && u.meter_id !== u.account_number && (
+                            <div className="text-[10.5px] text-nurock-slate-light font-mono mt-0.5">
+                              meter {u.meter_id}
+                            </div>
+                          )}
                         </td>
-                        <td className={
-                          "px-3 py-2 text-right tabular-nums text-xs " +
-                          (u.months_vacant >= 3 ? "text-flag-red font-medium" : "text-nurock-slate")
-                        }>
-                          {u.months_vacant}
+                        <td className="cell text-center">
+                          <span className={
+                            "inline-block px-1.5 py-0.5 rounded text-xs font-medium " +
+                            (u.months_vacant >= 3 ? "bg-flag-red-bg text-flag-red"
+                             : u.months_vacant >= 1 ? "bg-nurock-flag-amber-bg text-nurock-flag-amber"
+                             : "text-nurock-slate-light")
+                          }>
+                            {u.months_vacant}
+                          </span>
                         </td>
-                        {u.monthly.map((v, i) => (
-                          <td key={i} className="cell text-right num">
+                        {u.monthly.map((v, idx) => (
+                          <td key={idx} className="cell text-right num text-nurock-slate">
                             {v !== null && v > 0
                               ? formatDollars(v)
-                              : <span className="text-nurock-slate-light">—</span>}
+                              : <span className="text-nurock-slate-light">–</span>}
                           </td>
                         ))}
-                        <td className="px-3 py-2 text-right tabular-nums font-medium bg-[#FAFBFC]">
+                        <td className="cell text-right num bg-[#FAFBFC] font-semibold text-nurock-black">
                           {formatDollars(u.ytd)}
                         </td>
                       </tr>
                     ))}
                   </tbody>
-                  <tfoot className="bg-nurock-flag-navy-bg font-medium">
-                    <tr>
-                      <td className="px-3 py-2 sticky left-0 bg-nurock-flag-navy-bg z-10" colSpan={3}>
-                        Property total · {units.length} units
-                      </td>
-                      {monthlyRollup.map(r => (
-                        <td key={r.month} className="cell text-right num">
-                          {r.amount > 0 ? formatDollars(r.amount) : ""}
-                        </td>
-                      ))}
-                      <td className="cell text-right num">
-                        {formatDollars(ytdTotal)}
-                      </td>
-                    </tr>
-                  </tfoot>
                 </table>
               </div>
-
-              <p className="text-xs text-nurock-slate-light mt-4">
-                Units with three or more months of vacancy cost are flagged in red —
-                worth cross-referencing against leasing status to confirm whether
-                the units are genuinely vacant or if a billing anomaly is
-                incorrectly allocating costs. For LIHTC compliance, export this view
-                annually to document which units carried vacancy during the
-                reporting period.
-              </p>
             </>
           )}
         </div>

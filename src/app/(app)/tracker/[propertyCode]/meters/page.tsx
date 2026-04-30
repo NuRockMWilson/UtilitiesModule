@@ -60,12 +60,16 @@ export default async function MetersDetailPage({
     .in("code", ["5112", "5116"]);
 
   const glIds = (glRows ?? []).map((g: any) => g.id);
+  const glIdToCode = new Map<string, string>(
+    (glRows ?? []).map((g: any) => [g.id, g.code]),
+  );
 
   const { data: acctRaw } = glIds.length
     ? await supabase
         .from("utility_accounts")
         .select(`
           id, account_number, description, meter_id, esi_id, meter_category,
+          gl_account_id,
           vendors ( name )
         `)
         .eq("property_id", property.id)
@@ -73,7 +77,8 @@ export default async function MetersDetailPage({
         .in("gl_account_id", glIds)
     : { data: [] };
 
-  const accounts: AccountRow[] = (acctRaw ?? []).map((a: any) => ({
+  type AccountWithGl = AccountRow & { gl_code: string };
+  const accounts: AccountWithGl[] = (acctRaw ?? []).map((a: any) => ({
     id:             a.id,
     account_number: a.account_number,
     description:    a.description,
@@ -81,7 +86,14 @@ export default async function MetersDetailPage({
     esi_id:         a.esi_id,
     category:       a.meter_category ? (CATEGORY_LABELS[a.meter_category] ?? a.meter_category) : null,
     vendor_name:    a.vendors?.name ?? null,
+    gl_code:        glIdToCode.get(a.gl_account_id) ?? "5112",
   }));
+
+  // Partition into House Meters (5112) and Clubhouse (5116). Matches the
+  // legacy spreadsheet layout — clubhouse is its own section because it's
+  // a distinct meter on a different GL.
+  const houseMeters     = accounts.filter(a => a.gl_code === "5112");
+  const clubhouseMeters = accounts.filter(a => a.gl_code === "5116");
 
   // Pull every electric invoice for this property — tied to a utility_account
   // or not. Historical Summary rows have no utility_account_id; we route them
@@ -223,23 +235,47 @@ export default async function MetersDetailPage({
                 </div>
               )}
 
-              {/* Per-account grid */}
+              {/* Per-account grids — split into House Meters (GL 5112)
+                  and Clubhouse (GL 5116) to match the legacy spreadsheet. */}
               <section>
                 <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-nurock-navy mb-3">
-                  Meters — GL 5112 / 5116
+                  House meters &middot; GL 5112
                 </h2>
-                <PerAccountMonthlyGrid
-                  accounts={accounts}
-                  amountsByAccountMonth={amountsByAccountMonth}
-                  invoiceHrefByAccountMonth={invoiceByAccountMonth}
-                  leftHeader="Account #"
-                  middleHeader="Meter / Description"
-                  showCategory
-                  noteAnchor={{ property_id: property.id, year, notesByCell }}
-                
-                  historicalDisclaimerYear={year}
-                />
+                {houseMeters.length === 0 ? (
+                  <div className="card p-6 text-center text-[12.5px] text-nurock-slate-light">
+                    No house meters set up for this property.
+                  </div>
+                ) : (
+                  <PerAccountMonthlyGrid
+                    accounts={houseMeters}
+                    amountsByAccountMonth={amountsByAccountMonth}
+                    invoiceHrefByAccountMonth={invoiceByAccountMonth}
+                    leftHeader="Account #"
+                    middleHeader="Meter / Description"
+                    showCategory
+                    noteAnchor={{ property_id: property.id, year, notesByCell }}
+                    historicalDisclaimerYear={year}
+                  />
+                )}
               </section>
+
+              {clubhouseMeters.length > 0 && (
+                <section>
+                  <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-nurock-navy mb-3">
+                    Clubhouse &middot; GL 5116
+                  </h2>
+                  <PerAccountMonthlyGrid
+                    accounts={clubhouseMeters}
+                    amountsByAccountMonth={amountsByAccountMonth}
+                    invoiceHrefByAccountMonth={invoiceByAccountMonth}
+                    leftHeader="Account #"
+                    middleHeader="Meter / Description"
+                    showCategory
+                    noteAnchor={{ property_id: property.id, year, notesByCell }}
+                    historicalDisclaimerYear={year}
+                  />
+                </section>
+              )}
 
               <p className="text-[11px] text-nurock-slate-light">
                 Each cell links to the underlying invoice for that meter × month.
