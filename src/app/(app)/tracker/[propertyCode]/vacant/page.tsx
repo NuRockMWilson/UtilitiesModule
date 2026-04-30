@@ -82,18 +82,24 @@ export default async function VacantUnitsPage({
   }));
   const accountIds = accounts.map(a => a.id);
 
-  // All historical + live invoices on those UAs
+  // All historical + live invoices on those UAs.
+  // Pull `unit_label` and `meter_id` so master-account properties (Onion
+  // Creek bills 100+ vacant units against ONE Sage account number) can be
+  // split into per-unit rows. Properties with unique-account-per-unit
+  // (Walton Reserve) leave unit_label NULL and group by UA as before.
   const { data: invRaw } = accountIds.length
     ? await supabase
         .from("invoices")
-        .select("utility_account_id, invoice_date, service_period_end, total_amount_due")
+        .select("utility_account_id, invoice_date, service_period_end, total_amount_due, unit_label, meter_id")
         .in("utility_account_id", accountIds)
     : { data: [] };
 
   const invoices = (invRaw ?? []).map((i: any) => ({
-    account_id: i.utility_account_id as string,
-    date:       (i.service_period_end ?? i.invoice_date) as string | null,
-    amount:     Number(i.total_amount_due ?? 0),
+    account_id:  i.utility_account_id as string,
+    date:        (i.service_period_end ?? i.invoice_date) as string | null,
+    amount:      Number(i.total_amount_due ?? 0),
+    unit_label:  (i.unit_label ?? null) as string | null,
+    meter_id:    (i.meter_id ?? null)   as string | null,
   }));
 
   const years = Array.from(new Set(
@@ -102,28 +108,57 @@ export default async function VacantUnitsPage({
   )).sort((a, b) => b - a);
   if (!years.includes(year)) years.unshift(year);
 
-  // Build per-unit rows for the selected year
+  // Build per-unit rows. Group key = `${ua_id}::${unit_label or "default"}`.
+  // For master accounts the unit_label disambiguates 100+ rows that share
+  // the same UA. For per-unit-account properties, unit_label is null on
+  // every invoice so all invoices for a UA collapse to a single row keyed
+  // on the UA's description (the unit number).
   const unitMap = new Map<string, UnitRow>();
-  for (const a of accounts) {
-    unitMap.set(a.id, {
-      unit_label:     a.description?.trim() || a.account_number,
-      account_number: a.account_number,
-      meter_id:       a.meter_id,
-      monthly:        new Array(12).fill(null),
-      months_vacant:  0,
-      ytd:            0,
-    });
-  }
+
+  // Helper to derive the row's key + label for an invoice
+  const rowKeyFor = (inv: typeof invoices[number], ua: typeof accounts[number]) => {
+    if (inv.unit_label && inv.unit_label.trim()) {
+      return {
+        key:    `${ua.id}::${inv.unit_label}`,
+        label:  inv.unit_label.trim(),
+        meter:  inv.meter_id ?? ua.meter_id,
+      };
+    }
+    return {
+      key:    `${ua.id}::default`,
+      label:  ua.description?.trim() || ua.account_number,
+      meter:  ua.meter_id,
+    };
+  };
+
+  const accountById = new Map(accounts.map(a => [a.id, a]));
+
   for (const inv of invoices) {
     if (!inv.date) continue;
     const y = parseInt(inv.date.substring(0, 4), 10);
     if (y !== year) continue;
     const m = parseInt(inv.date.substring(5, 7), 10);
-    const row = unitMap.get(inv.account_id);
-    if (!row) continue;
+
+    const ua = accountById.get(inv.account_id);
+    if (!ua) continue;
+
+    const { key, label, meter } = rowKeyFor(inv, ua);
+    let row = unitMap.get(key);
+    if (!row) {
+      row = {
+        unit_label:     label,
+        account_number: ua.account_number,
+        meter_id:       meter,
+        monthly:        new Array(12).fill(null),
+        months_vacant:  0,
+        ytd:            0,
+      };
+      unitMap.set(key, row);
+    }
     row.monthly[m - 1] = (row.monthly[m - 1] ?? 0) + inv.amount;
     row.ytd += inv.amount;
   }
+
   for (const row of unitMap.values()) {
     row.months_vacant = row.monthly.filter(v => v !== null && v > 0).length;
   }
