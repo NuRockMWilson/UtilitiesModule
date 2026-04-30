@@ -6,6 +6,7 @@ import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars } from "@/lib/format";
 import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
 import { displayPropertyName } from "@/lib/property-display";
+import { fetchAllInvoicesForProperty } from "@/lib/invoice-queries";
 
 /**
  * Combined Phone + Cable detail page. Per-account monthly grid for both
@@ -72,13 +73,11 @@ export default async function CommsDetailPage({
   // Pull every phone/cable invoice for this property — tied to a utility_account
   // or not. Historical Summary rows have no utility_account_id; route them to
   // synthetic per-GL "Summary rollup" rows so dollars still appear.
-  const { data: invRaw } = glIds.length
-    ? await supabase
-        .from("invoices")
-        .select("id, invoice_number, utility_account_id, gl_account_id, invoice_date, service_period_end, total_amount_due")
-        .eq("property_id", property.id)
-        .in("gl_account_id", glIds)
-    : { data: [] };
+  const invRaw = await fetchAllInvoicesForProperty(supabase, {
+    propertyId: property.id,
+    glIds,
+    selectCols: "id, invoice_number, utility_account_id, gl_account_id, invoice_date, service_period_end, total_amount_due",
+  });
 
   const invoices = (invRaw ?? []).map((i: any) => {
     const gl = glCodeById.get(i.gl_account_id) as string | undefined;

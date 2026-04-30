@@ -6,6 +6,7 @@ import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars, formatPercent } from "@/lib/format";
 import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
 import { displayPropertyName } from "@/lib/property-display";
+import { fetchAllInvoicesForProperty } from "@/lib/invoice-queries";
 
 /**
  * House Meters detail page. Shows every electric meter at the property with
@@ -98,13 +99,11 @@ export default async function MetersDetailPage({
   // Pull every electric invoice for this property — tied to a utility_account
   // or not. Historical Summary rows have no utility_account_id; we route them
   // to a synthetic "Summary rollup" row so dollars still appear.
-  const { data: invRaw } = glIds.length
-    ? await supabase
-        .from("invoices")
-        .select("id, invoice_number, utility_account_id, gl_account_id, invoice_date, service_period_end, total_amount_due")
-        .eq("property_id", property.id)
-        .in("gl_account_id", glIds)
-    : { data: [] };
+  const invRaw = await fetchAllInvoicesForProperty(supabase, {
+    propertyId: property.id,
+    glIds,
+    selectCols: "id, invoice_number, utility_account_id, gl_account_id, invoice_date, service_period_end, total_amount_due",
+  });
 
   const invoices = (invRaw ?? []).map((i: any) => ({
     id:             i.id as string,

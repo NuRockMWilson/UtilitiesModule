@@ -5,6 +5,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars } from "@/lib/format";
 import { displayPropertyName } from "@/lib/property-display";
+import { fetchAllInvoicesForAccounts } from "@/lib/invoice-queries";
 
 /**
  * Vacant Units detail page (GL 5114). Shows per-unit, per-month electric
@@ -82,17 +83,15 @@ export default async function VacantUnitsPage({
   }));
   const accountIds = accounts.map(a => a.id);
 
-  // All historical + live invoices on those UAs.
-  // Pull `unit_label` and `meter_id` so master-account properties (Onion
-  // Creek bills 100+ vacant units against ONE Sage account number) can be
-  // split into per-unit rows. Properties with unique-account-per-unit
-  // (Walton Reserve) leave unit_label NULL and group by UA as before.
-  const { data: invRaw } = accountIds.length
-    ? await supabase
-        .from("invoices")
-        .select("utility_account_id, invoice_date, service_period_end, total_amount_due, unit_label, meter_id")
-        .in("utility_account_id", accountIds)
-    : { data: [] };
+  // All historical + live invoices on those UAs. Master-account properties
+  // (Onion Creek's 27104 80000) bill 100+ vacant units per month under one
+  // UA → 558 has ~1500 vacant invoices in DB, exceeding Supabase's default
+  // 1000-row cap. The shared helper paginates in parallel with a stable
+  // sort to preserve all rows.
+  const invRaw = await fetchAllInvoicesForAccounts(supabase, {
+    accountIds,
+    selectCols: "utility_account_id, invoice_date, service_period_end, total_amount_due, unit_label, meter_id",
+  });
 
   const invoices = (invRaw ?? []).map((i: any) => ({
     account_id:  i.utility_account_id as string,

@@ -6,6 +6,7 @@ import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars, formatPercent } from "@/lib/format";
 import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
 import { displayPropertyName } from "@/lib/property-display";
+import { fetchAllInvoicesForProperty } from "@/lib/invoice-queries";
 
 /**
  * Trash / Garbage detail page. Per-account monthly grid for GL 5135.
@@ -69,13 +70,11 @@ export default async function TrashDetailPage({
   // Pull every trash invoice for this property — tied to a utility_account or
   // not. Historical Summary rows have no utility_account_id; route them to a
   // synthetic "Summary rollup" row so dollars still appear.
-  const { data: invRaw } = glRow
-    ? await supabase
-        .from("invoices")
-        .select("id, invoice_number, utility_account_id, invoice_date, service_period_end, total_amount_due, units_billed, units_billed_label")
-        .eq("property_id", property.id)
-        .eq("gl_account_id", glRow.id)
-    : { data: [] };
+  const invRaw = await fetchAllInvoicesForProperty(supabase, {
+    propertyId: property.id,
+    glIds:      glRow?.id ? [glRow.id] : [],
+    selectCols: "id, invoice_number, utility_account_id, invoice_date, service_period_end, total_amount_due, units_billed, units_billed_label",
+  });
 
   const invoices = (invRaw ?? []).map((i: any) => ({
     id:             i.id as string,

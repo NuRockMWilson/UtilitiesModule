@@ -6,6 +6,7 @@ import { PropertyPicker } from "@/components/tracker/PropertyPicker";
 import { formatDollars } from "@/lib/format";
 import { PerAccountMonthlyGrid, type AccountRow } from "@/components/tracker/PerAccountMonthlyGrid";
 import { displayPropertyName } from "@/lib/property-display";
+import { fetchAllInvoicesForProperty } from "@/lib/invoice-queries";
 
 /**
  * Water detail page. Shows every water/sewer/irrigation/stormwater account
@@ -86,13 +87,11 @@ export default async function WaterDetailPage({
   // rows (source_reference='historical_import_summary') aren't linked to a
   // utility_account but still need to show up, as a synthetic "Summary rollup"
   // pseudo-account per GL.
-  const { data: invRaw } = glIds.length
-    ? await supabase
-        .from("invoices")
-        .select("id, invoice_number, utility_account_id, gl_account_id, invoice_date, service_period_end, total_amount_due")
-        .eq("property_id", property.id)
-        .in("gl_account_id", glIds)
-    : { data: [] };
+  const invRaw = await fetchAllInvoicesForProperty(supabase, {
+    propertyId: property.id,
+    glIds,
+    selectCols: "id, invoice_number, utility_account_id, gl_account_id, invoice_date, service_period_end, total_amount_due",
+  });
 
   const invoices = (invRaw ?? []).map((i: any) => {
     const gl = glById.get(i.gl_account_id) as { code: string } | undefined;
