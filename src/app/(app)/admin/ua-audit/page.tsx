@@ -197,6 +197,12 @@ export default async function UAOrphanAuditPage() {
     invoiceTotal: number;
     candidates: Array<typeof allUAs[0] & { invoiceCount: number; invoiceTotal: number }>;
     mergeSql: string;
+    /**
+     * If the candidate matcher demoted a single-candidate row to review
+     * because the per-invoice averages don't match, this holds the
+     * warning text shown on the card. Null otherwise.
+     */
+    avgWarning: string | null;
   };
 
   const rows: OrphanRow[] = suspects.map(orphan => {
@@ -222,8 +228,34 @@ export default async function UAOrphanAuditPage() {
 
     let category: Category;
     let mergeSql: string;
+    let avgWarning: string | null = null;
 
-    if (candidates.length === 1) {
+    // ── Per-invoice average sanity check ─────────────────────────────────
+    // Even when there's exactly one candidate, the merge can be wrong if
+    // the orphan and target represent DIFFERENT services on a combined
+    // bill (e.g. a stormwater sub-line vs the consolidated water bill).
+    // Compute average $ per invoice on each side; if they're more than
+    // 3x apart in either direction, treat it as a multi-stream case
+    // even though there's only one peer.
+    //
+    // This catches the migration 0023 issue: stormwater / env-fee
+    // sub-line items were imported as separate UAs but their "real"
+    // counterpart is the parent water UA which has a much higher
+    // per-invoice amount.
+    function avgPerInvoice(count: number, total: number): number | null {
+      if (count <= 0) return null;
+      return Math.abs(total / count);
+    }
+    const orphanAvg    = avgPerInvoice(stats.count, stats.total);
+    const targetAvg    = candidates.length === 1
+      ? avgPerInvoice(candidates[0].invoiceCount, candidates[0].invoiceTotal)
+      : null;
+    const RATIO_LIMIT  = 3.0;
+    const avgsAreFarApart = orphanAvg !== null && targetAvg !== null && targetAvg > 0
+      ? (orphanAvg / targetAvg > RATIO_LIMIT || targetAvg / orphanAvg > RATIO_LIMIT)
+      : false;
+
+    if (candidates.length === 1 && !avgsAreFarApart) {
       category = "merge_target";
       const target = candidates[0];
       mergeSql = `-- Merge orphan "${orphan.account_number}" → "${target.account_number}"
@@ -243,6 +275,29 @@ BEGIN
     (SELECT count(*) FROM invoices WHERE utility_account_id = '${target.id}'),
     '${orphan.id}', '${target.id}';
 END $$;`;
+    } else if (candidates.length === 1 && avgsAreFarApart) {
+      // Single candidate but the per-invoice averages are wildly
+      // different — almost certainly a sub-line vs combined-bill case.
+      category = "multi_stream_review";
+      avgWarning =
+        `⚠ Per-invoice averages don't match: orphan ` +
+        `~$${orphanAvg!.toFixed(0)}/invoice, target ~$${targetAvg!.toFixed(0)}/invoice ` +
+        `(${(Math.max(orphanAvg!, targetAvg!) / Math.min(orphanAvg!, targetAvg!)).toFixed(1)}x ratio). ` +
+        `These likely represent DIFFERENT services on a combined bill. ` +
+        `Merging would mix services. Consider adding a sub_code to keep them separate.`;
+      const target = candidates[0];
+      mergeSql = `-- ⚠ AVG MISMATCH — orphan and target represent different services on a combined bill?
+-- Orphan: "${orphan.account_number}" — ${stats.count} invoices, $${stats.total.toFixed(2)} (avg $${orphanAvg!.toFixed(2)})
+-- Target: "${target.account_number}" — ${target.invoiceCount} invoices, $${target.invoiceTotal.toFixed(2)} (avg $${targetAvg!.toFixed(2)})
+--
+-- Do NOT auto-merge. Likely needs sub_code separation in the chart of
+-- accounts (e.g. 5120-water vs 5120-stormwater) or a deliberate decision
+-- to keep them as distinct UAs.
+--
+-- If you've confirmed the merge is correct anyway:
+-- UPDATE invoices SET utility_account_id = '${target.id}', vendor_id = '${(target.vendor as any)?.id}'
+--   WHERE utility_account_id = '${orphan.id}';
+-- UPDATE utility_accounts SET active = false WHERE id = '${orphan.id}';`;
     } else if (candidates.length > 1) {
       category = "multi_stream_review";
       mergeSql = `-- MULTIPLE real UAs at ${prop?.code}/${gl?.code} — needs human review
@@ -276,6 +331,7 @@ ${candidates.map(c => `--   "${c.account_number}" — ${c.invoiceCount} invoices
       invoiceTotal: stats.total,
       candidates,
       mergeSql,
+      avgWarning,
     };
   });
 

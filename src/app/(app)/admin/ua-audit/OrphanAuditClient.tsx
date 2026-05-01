@@ -28,6 +28,7 @@ interface OrphanRow {
   invoiceTotal: number;
   candidates: CandidateUA[];
   mergeSql: string;
+  avgWarning: string | null;
 }
 
 interface Props {
@@ -82,10 +83,10 @@ export function OrphanAuditClient({ mergeRows, reviewRows, historicalRows }: Pro
 
       {reviewRows.length > 0 && (
         <Section
-          title="Multiple candidates — needs review"
+          title="Needs review"
           count={reviewRows.length}
           tone="amber"
-          description="More than one real UA at this property + GL (e.g. compactor + recycle). A human must decide which one the orphan's invoices belong to."
+          description="Either multiple real UAs exist at this property + GL (e.g. compactor + recycle), or the orphan and target have very different per-invoice averages (suggesting they're different services on a combined bill). A human must decide what to do."
         >
           {reviewRows.map(renderRow)}
         </Section>
@@ -201,6 +202,14 @@ function OrphanCard({
 
       {expanded && (
         <div className="px-5 pb-5 border-t border-gray-100 pt-4 space-y-4">
+          {/* Per-invoice average mismatch warning — surfaces above everything else */}
+          {row.avgWarning && (
+            <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-800">
+              <div className="font-semibold mb-1">Per-invoice average mismatch</div>
+              <p className="text-xs leading-relaxed">{row.avgWarning}</p>
+            </div>
+          )}
+
           {category === "merge_target" && candidates[0] && (
             <div>
               <div className="text-xs font-semibold text-nurock-slate uppercase tracking-wide mb-2">
@@ -220,7 +229,9 @@ function OrphanCard({
           {category === "multi_stream_review" && candidates.length > 0 && (
             <div>
               <div className="text-xs font-semibold text-nurock-slate uppercase tracking-wide mb-2">
-                Possible merge targets ({candidates.length})
+                {candidates.length === 1
+                  ? "Possible merge target (use only after verifying)"
+                  : `Possible merge targets (${candidates.length})`}
               </div>
               <div className="space-y-2">
                 {candidates.map(c => (
