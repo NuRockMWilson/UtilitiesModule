@@ -21,10 +21,16 @@
  *   b) Sets the orphan to active=false
  */
 
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/layout/TopBar";
 import { displayPropertyName } from "@/lib/property-display";
 import { OrphanAuditClient } from "./OrphanAuditClient";
+
+// Force this page to be dynamically rendered on every request.
+// Without this, Next.js caches the result at build time and the audit
+// list goes stale the moment any UA changes.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 /**
  * Detection logic — what makes an account_number look like a placeholder
@@ -68,7 +74,33 @@ function isPlaceholder(accountNumber: string): boolean {
 }
 
 export default async function UAOrphanAuditPage() {
-  const supabase = createSupabaseServerClient();
+  // Auth: the layout already enforces login, but this page exposes
+  // portfolio-wide UA data, so check role explicitly here too.
+  const userClient = createSupabaseServerClient();
+  const { data: { user } } = await userClient.auth.getUser();
+  if (user) {
+    const { data: profile } = await userClient
+      .from("user_profiles")
+      .select("role")
+      .eq("id", user.id)
+      .single();
+    if (profile?.role !== "admin") {
+      return (
+        <>
+          <TopBar title="Utility Account Audit" subtitle="Admin only" />
+          <div className="p-8">
+            <div className="card p-10 text-center text-nurock-slate">
+              This page requires admin role.
+            </div>
+          </div>
+        </>
+      );
+    }
+  }
+
+  // Service-role client for the actual data — bypasses RLS so we see
+  // the full portfolio, not just what the user's role-scoped policies allow.
+  const supabase = createSupabaseServiceClient();
 
   // Pull every active UA with its invoice count + total
   const { data: uas } = await supabase
