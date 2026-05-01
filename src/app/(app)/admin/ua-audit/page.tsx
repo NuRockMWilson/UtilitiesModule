@@ -46,30 +46,35 @@ export const revalidate = 0;
  *   - "nan" (pandas NaN that leaked through the historical import)
  *   - typos / partial vendor names ("Repbulic")
  *
- * Strategy: flag anything that is short, lacks digits, or contains a known
- * placeholder phrase. This is intentionally permissive — false positives
- * just cost a UI line; false negatives leave duplicate UAs accumulating.
+ * Be careful NOT to flag real account numbers that contain placeholder-
+ * like substrings: e.g. "Clubhouse - 3248526" is a real account at 603,
+ * even though it contains "clubhouse". The general rule: if it has digits
+ * AND is long enough, it's a real account, even if it also has descriptive
+ * words attached.
  */
 
-/** Specific phrases known to indicate placeholders */
-const PLACEHOLDER_PHRASES = [
-  "total", "summary", "rolled",
+const PLACEHOLDER_EXACT = new Set([
+  "nan", "null", "none", "n/a", "tbd", "unknown",
+  "garbage total", "water total", "electric total", "sewer total",
+  "gas total", "trash total", "cable total", "phone total",
+  "club house total", "clubhouse total",
   "storm water", "stormwater",
-  "envir", "env fee",
-  "club house", "clubhouse",
-];
+  "envir. protect. fee", "env fee", "environmental fee",
+  "summary", "summary total",
+  "repbulic", // known typo
+]);
 
 function isPlaceholder(accountNumber: string): boolean {
   const n = accountNumber.toLowerCase().trim();
   if (!n) return true;
-  // Definite placeholder values
-  if (n === "nan" || n === "null" || n === "none" || n === "n/a") return true;
+  // Whole-string match against known placeholders
+  if (PLACEHOLDER_EXACT.has(n)) return true;
   // Account numbers must contain at least one digit
   if (!/\d/.test(n)) return true;
   // Real account numbers are at least 4 characters
   if (n.length < 4) return true;
-  // Known placeholder phrases
-  if (PLACEHOLDER_PHRASES.some(t => n.includes(t))) return true;
+  // Otherwise it's a real account number — even if it contains words like
+  // "Clubhouse" or "Storm Water" as descriptors alongside actual digits.
   return false;
 }
 
@@ -150,24 +155,42 @@ export default async function UAOrphanAuditPage() {
 
   // ── DIAGNOSTIC: check what the query actually returned ─────────────
   // Temporary — will remove once orphans render correctly.
+  const placeholderSuspects = allUAs.filter(ua => {
+    if (!ua.active) return false;
+    return isPlaceholder((ua.account_number ?? "").toString());
+  });
+
+  // For each suspect, list every other UA at the same property + GL so we
+  // can see why the candidate matcher might (or might not) find a target.
+  const candidateEnvironment = placeholderSuspects.map(ua => {
+    const peers = allUAs.filter(other =>
+      other.id !== ua.id &&
+      (other.property as any)?.id === (ua.property as any)?.id &&
+      (other.gl as any)?.id === (ua.gl as any)?.id,
+    );
+    return {
+      orphan: {
+        property: (ua.property as any)?.code,
+        gl: (ua.gl as any)?.code,
+        account_number: ua.account_number,
+        vendor: (ua.vendor as any)?.name,
+      },
+      peers: peers.map(p => ({
+        account_number: p.account_number,
+        active: p.active,
+        vendor: (p.vendor as any)?.name,
+        is_placeholder_too: isPlaceholder((p.account_number ?? "").toString()),
+      })),
+    };
+  });
+
   const diagnostic = {
     queryError: uasError ? String(uasError.message || uasError) : null,
     totalUAs: allUAs.length,
     activeUAs: allUAs.filter(u => u.active).length,
     totalInvoices: allInvoices.length,
-    knownOrphanCheck: allUAs
-      .filter(u => {
-        const ac = (u.account_number ?? "").toString().toLowerCase();
-        return ac.includes("garbage total") || ac.includes("storm water") ||
-               ac === "nan" || ac === "repbulic" || ac.includes("club house") ||
-               ac.includes("envir");
-      })
-      .map(u => ({
-        account_number: u.account_number,
-        active: u.active,
-        property_code: (u.property as any)?.code,
-        gl_code: (u.gl as any)?.code,
-      })),
+    activeOrphanCount: placeholderSuspects.length,
+    candidateEnvironment,
   };
   // ── END DIAGNOSTIC ──────────────────────────────────────────────────
 
@@ -182,8 +205,11 @@ export default async function UAOrphanAuditPage() {
     });
   }
 
-  // Flag suspected orphans
+  // Flag suspected orphans — only consider ACTIVE UAs. Inactive ones
+  // have already been deactivated (likely via a previous merge) and don't
+  // need to be surfaced again.
   const suspects = allUAs.filter(ua => {
+    if (!ua.active) return false;
     const acct = (ua.account_number ?? "").toString();
     return isPlaceholder(acct);
   });
