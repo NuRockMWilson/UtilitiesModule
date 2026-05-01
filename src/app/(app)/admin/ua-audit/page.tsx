@@ -102,38 +102,65 @@ export default async function UAOrphanAuditPage() {
   // the full portfolio, not just what the user's role-scoped policies allow.
   const supabase = createSupabaseServiceClient();
 
-  // Pull every active UA with its invoice count + total
-  const { data: uas, error: uasError } = await supabase
-    .from("utility_accounts")
-    .select(`
-      id, account_number, description, sub_code, active,
-      property:properties(id, code, name),
-      vendor:vendors(id, name),
-      gl:gl_accounts(id, code, description)
-    `)
-    .order("account_number");
+  // Pull every active UA with its invoice count + total.
+  //
+  // IMPORTANT: Supabase caps a single query at 1000 rows. The portfolio
+  // has more than 1000 UAs, so we must paginate via .range() until we've
+  // walked the whole set. Without this, account numbers that sort after
+  // the first 1000 (including most of the known orphans, which start with
+  // letters like "Garbage Total" / "Storm Water") never reach the page.
+  const PAGE_SIZE = 1000;
+  let allUAs: any[] = [];
+  let uasError: any = null;
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data: page, error } = await supabase
+      .from("utility_accounts")
+      .select(`
+        id, account_number, description, sub_code, active,
+        property:properties(id, code, name),
+        vendor:vendors(id, name),
+        gl:gl_accounts(id, code, description)
+      `)
+      .order("account_number")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) { uasError = error; break; }
+    if (!page || page.length === 0) break;
+    allUAs = allUAs.concat(page);
+    if (page.length < PAGE_SIZE) break;
+    // Safety stop — bail out at 20k rows (much larger than the portfolio).
+    if (allUAs.length > 20000) break;
+  }
 
-  const allUAs = uas ?? [];
+  // ── DIAGNOSTIC moved below the invoice-counts query ───────────────────
+
+  // Get invoice counts per UA (aggregate). Same pagination requirement
+  // as above — there are way more than 1000 invoices in the portfolio.
+  let allInvoices: Array<{ utility_account_id: string; total_amount_due: number }> = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data: page } = await supabase
+      .from("invoices")
+      .select("utility_account_id, total_amount_due")
+      .not("utility_account_id", "is", null)
+      .range(from, from + PAGE_SIZE - 1);
+    if (!page || page.length === 0) break;
+    allInvoices = allInvoices.concat(page as any);
+    if (page.length < PAGE_SIZE) break;
+    if (allInvoices.length > 100000) break; // safety
+  }
 
   // ── DIAGNOSTIC: check what the query actually returned ─────────────
-  // We've had multiple deploys where this page shows zero orphans
-  // despite the database having known orphans. This block surfaces the
-  // raw query results to the page so we can see in production what's
-  // happening, instead of guessing.
+  // Temporary — will remove once orphans render correctly.
   const diagnostic = {
     queryError: uasError ? String(uasError.message || uasError) : null,
     totalUAs: allUAs.length,
     activeUAs: allUAs.filter(u => u.active).length,
-    sampleAccountNumbers: allUAs.slice(0, 10).map(u => ({
-      account_number: u.account_number,
-      active: u.active,
-      isPlaceholder: isPlaceholder((u.account_number ?? "").toString()),
-    })),
+    totalInvoices: allInvoices.length,
     knownOrphanCheck: allUAs
       .filter(u => {
         const ac = (u.account_number ?? "").toString().toLowerCase();
         return ac.includes("garbage total") || ac.includes("storm water") ||
-               ac === "nan" || ac === "repbulic" || ac.includes("club house");
+               ac === "nan" || ac === "repbulic" || ac.includes("club house") ||
+               ac.includes("envir");
       })
       .map(u => ({
         account_number: u.account_number,
@@ -144,15 +171,9 @@ export default async function UAOrphanAuditPage() {
   };
   // ── END DIAGNOSTIC ──────────────────────────────────────────────────
 
-  // Get invoice counts per UA (aggregate)
-  const { data: invCounts } = await supabase
-    .from("invoices")
-    .select("utility_account_id, total_amount_due")
-    .not("utility_account_id", "is", null);
-
   // Build a map: ua_id → { count, total }
   const countMap = new Map<string, { count: number; total: number }>();
-  for (const inv of invCounts ?? []) {
+  for (const inv of allInvoices) {
     const id = inv.utility_account_id as string;
     const cur = countMap.get(id) ?? { count: 0, total: 0 };
     countMap.set(id, {
