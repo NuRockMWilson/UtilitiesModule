@@ -26,16 +26,45 @@ import { TopBar } from "@/components/layout/TopBar";
 import { displayPropertyName } from "@/lib/property-display";
 import { OrphanAuditClient } from "./OrphanAuditClient";
 
-/** Tokens that indicate a placeholder account number from the migration */
-const PLACEHOLDER_TOKENS = [
-  "total", "garbage total", "water total", "electric total",
-  "sewer total", "gas total", "trash total", "cable total",
-  "phone total", "summary",
+/**
+ * Detection logic — what makes an account_number look like a placeholder
+ * rather than a real account number from a vendor's bill?
+ *
+ * Real account numbers almost always:
+ *   - contain digits
+ *   - are 4+ characters long
+ *
+ * Placeholders that we've seen in the wild:
+ *   - "Garbage Total", "Club House Total", "Water Total" (Summary-tab labels)
+ *   - "Storm Water", "Envir. Protect. Fee" (line-item labels used as fallback)
+ *   - "nan" (pandas NaN that leaked through the historical import)
+ *   - typos / partial vendor names ("Repbulic")
+ *
+ * Strategy: flag anything that is short, lacks digits, or contains a known
+ * placeholder phrase. This is intentionally permissive — false positives
+ * just cost a UI line; false negatives leave duplicate UAs accumulating.
+ */
+
+/** Specific phrases known to indicate placeholders */
+const PLACEHOLDER_PHRASES = [
+  "total", "summary", "rolled",
+  "storm water", "stormwater",
+  "envir", "env fee",
+  "club house", "clubhouse",
 ];
 
 function isPlaceholder(accountNumber: string): boolean {
   const n = accountNumber.toLowerCase().trim();
-  return PLACEHOLDER_TOKENS.some(t => n.includes(t));
+  if (!n) return true;
+  // Definite placeholder values
+  if (n === "nan" || n === "null" || n === "none" || n === "n/a") return true;
+  // Account numbers must contain at least one digit
+  if (!/\d/.test(n)) return true;
+  // Real account numbers are at least 4 characters
+  if (n.length < 4) return true;
+  // Known placeholder phrases
+  if (PLACEHOLDER_PHRASES.some(t => n.includes(t))) return true;
+  return false;
 }
 
 export default async function UAOrphanAuditPage() {
