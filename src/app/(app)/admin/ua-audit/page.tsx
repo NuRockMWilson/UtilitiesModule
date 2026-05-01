@@ -103,7 +103,7 @@ export default async function UAOrphanAuditPage() {
   const supabase = createSupabaseServiceClient();
 
   // Pull every active UA with its invoice count + total
-  const { data: uas } = await supabase
+  const { data: uas, error: uasError } = await supabase
     .from("utility_accounts")
     .select(`
       id, account_number, description, sub_code, active,
@@ -114,6 +114,35 @@ export default async function UAOrphanAuditPage() {
     .order("account_number");
 
   const allUAs = uas ?? [];
+
+  // ── DIAGNOSTIC: check what the query actually returned ─────────────
+  // We've had multiple deploys where this page shows zero orphans
+  // despite the database having known orphans. This block surfaces the
+  // raw query results to the page so we can see in production what's
+  // happening, instead of guessing.
+  const diagnostic = {
+    queryError: uasError ? String(uasError.message || uasError) : null,
+    totalUAs: allUAs.length,
+    activeUAs: allUAs.filter(u => u.active).length,
+    sampleAccountNumbers: allUAs.slice(0, 10).map(u => ({
+      account_number: u.account_number,
+      active: u.active,
+      isPlaceholder: isPlaceholder((u.account_number ?? "").toString()),
+    })),
+    knownOrphanCheck: allUAs
+      .filter(u => {
+        const ac = (u.account_number ?? "").toString().toLowerCase();
+        return ac.includes("garbage total") || ac.includes("storm water") ||
+               ac === "nan" || ac === "repbulic" || ac.includes("club house");
+      })
+      .map(u => ({
+        account_number: u.account_number,
+        active: u.active,
+        property_code: (u.property as any)?.code,
+        gl_code: (u.gl as any)?.code,
+      })),
+  };
+  // ── END DIAGNOSTIC ──────────────────────────────────────────────────
 
   // Get invoice counts per UA (aggregate)
   const { data: invCounts } = await supabase
@@ -211,6 +240,16 @@ END $$;`
         subtitle={`${totalOrphans} suspected orphan UAs · ${totalOrphanInvoices.toLocaleString()} invoices · ${resolvable} auto-resolvable`}
       />
       <div className="p-8">
+        {/* Diagnostic block — temporary; remove once orphans render correctly */}
+        <div className="card p-4 mb-4 bg-blue-50 border border-blue-200">
+          <div className="text-xs font-semibold text-blue-900 uppercase tracking-wide mb-2">
+            🔍 Diagnostic info (temporary)
+          </div>
+          <pre className="text-xs text-blue-900 whitespace-pre-wrap font-mono">
+            {JSON.stringify(diagnostic, null, 2)}
+          </pre>
+        </div>
+
         {totalOrphans === 0 ? (
           <div className="card p-10 text-center text-nurock-slate">
             <p className="text-lg font-medium text-green-700 mb-1">✓ No orphan UAs detected</p>
