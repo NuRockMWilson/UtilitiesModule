@@ -153,47 +153,6 @@ export default async function UAOrphanAuditPage() {
     if (allInvoices.length > 100000) break; // safety
   }
 
-  // ── DIAGNOSTIC: check what the query actually returned ─────────────
-  // Temporary — will remove once orphans render correctly.
-  const placeholderSuspects = allUAs.filter(ua => {
-    if (!ua.active) return false;
-    return isPlaceholder((ua.account_number ?? "").toString());
-  });
-
-  // For each suspect, list every other UA at the same property + GL so we
-  // can see why the candidate matcher might (or might not) find a target.
-  const candidateEnvironment = placeholderSuspects.map(ua => {
-    const peers = allUAs.filter(other =>
-      other.id !== ua.id &&
-      (other.property as any)?.id === (ua.property as any)?.id &&
-      (other.gl as any)?.id === (ua.gl as any)?.id,
-    );
-    return {
-      orphan: {
-        property: (ua.property as any)?.code,
-        gl: (ua.gl as any)?.code,
-        account_number: ua.account_number,
-        vendor: (ua.vendor as any)?.name,
-      },
-      peers: peers.map(p => ({
-        account_number: p.account_number,
-        active: p.active,
-        vendor: (p.vendor as any)?.name,
-        is_placeholder_too: isPlaceholder((p.account_number ?? "").toString()),
-      })),
-    };
-  });
-
-  const diagnostic = {
-    queryError: uasError ? String(uasError.message || uasError) : null,
-    totalUAs: allUAs.length,
-    activeUAs: allUAs.filter(u => u.active).length,
-    totalInvoices: allInvoices.length,
-    activeOrphanCount: placeholderSuspects.length,
-    candidateEnvironment,
-  };
-  // ── END DIAGNOSTIC ──────────────────────────────────────────────────
-
   // Build a map: ua_id → { count, total }
   const countMap = new Map<string, { count: number; total: number }>();
   for (const inv of allInvoices) {
@@ -214,10 +173,26 @@ export default async function UAOrphanAuditPage() {
     return isPlaceholder(acct);
   });
 
-  // For each suspect, find candidate "real" UAs: same property + same GL,
-  // active, non-placeholder account number
+  // Three categories based on what peers exist at the same property + GL:
+  //
+  //   merge_target      — there's exactly one real (non-placeholder) UA at
+  //                       the same property+GL → safe to auto-merge.
+  //
+  //   multi_stream_review — there are multiple real UAs at the same
+  //                       property+GL (e.g. compactor + recycle). The
+  //                       orphan's invoices could go to any of them, so a
+  //                       human needs to decide. Surface both candidates.
+  //
+  //   historical_only   — no real UAs at this property+GL. The orphan IS
+  //                       the only UA holding all the historical invoices
+  //                       for that vendor at that property. Don't merge —
+  //                       instead, prompt the user to fill in the real
+  //                       account number when the next live bill arrives.
+  type Category = "merge_target" | "multi_stream_review" | "historical_only";
+
   type OrphanRow = {
     ua: typeof allUAs[0];
+    category: Category;
     invoiceCount: number;
     invoiceTotal: number;
     candidates: Array<typeof allUAs[0] & { invoiceCount: number; invoiceTotal: number }>;
@@ -229,9 +204,11 @@ export default async function UAOrphanAuditPage() {
     const prop = (orphan.property as any);
     const gl = (orphan.gl as any);
 
+    // Real (non-placeholder) UAs at the same property + GL
     const candidates = allUAs
       .filter(ua =>
         ua.id !== orphan.id &&
+        ua.active &&
         (ua.property as any)?.id === prop?.id &&
         (ua.gl as any)?.id === gl?.id &&
         !isPlaceholder((ua.account_number ?? "").toString()),
@@ -243,10 +220,13 @@ export default async function UAOrphanAuditPage() {
         invoiceTotal: (countMap.get(ua.id) ?? { total: 0 }).total,
       }));
 
-    // Generate merge SQL for the best candidate (first one)
-    const target = candidates[0];
-    const mergeSql = target
-      ? `-- Merge orphan "${orphan.account_number}" → "${target.account_number}"
+    let category: Category;
+    let mergeSql: string;
+
+    if (candidates.length === 1) {
+      category = "merge_target";
+      const target = candidates[0];
+      mergeSql = `-- Merge orphan "${orphan.account_number}" → "${target.account_number}"
 -- Property: ${prop?.code}  GL: ${gl?.code}
 DO $$
 BEGIN
@@ -262,13 +242,36 @@ BEGIN
   RAISE NOTICE 'Merged % invoices from orphan % to %',
     (SELECT count(*) FROM invoices WHERE utility_account_id = '${target.id}'),
     '${orphan.id}', '${target.id}';
-END $$;`
-      : `-- No merge candidate found for orphan "${orphan.account_number}"
--- at property ${prop?.code}, GL ${gl?.code}
--- Manual resolution required.`;
+END $$;`;
+    } else if (candidates.length > 1) {
+      category = "multi_stream_review";
+      mergeSql = `-- MULTIPLE real UAs at ${prop?.code}/${gl?.code} — needs human review
+-- Orphan: "${orphan.account_number}" (${stats.count} invoices)
+-- Candidates:
+${candidates.map(c => `--   "${c.account_number}" — ${c.invoiceCount} invoices`).join("\n")}
+--
+-- Pick the right target manually, then run:
+-- UPDATE invoices SET utility_account_id = '<TARGET_UA_ID>', vendor_id = '<TARGET_VENDOR_ID>'
+--   WHERE utility_account_id = '${orphan.id}';
+-- UPDATE utility_accounts SET active = false WHERE id = '${orphan.id}';`;
+    } else {
+      category = "historical_only";
+      mergeSql = `-- "${orphan.account_number}" at ${prop?.code}/${gl?.code} is the ONLY UA
+-- for this vendor + property + GL. No merge needed.
+--
+-- Action: when the next live bill arrives for this account, look up its
+-- real account number and update this UA in place:
+--
+-- UPDATE utility_accounts
+--   SET account_number = '<REAL_ACCOUNT_NUMBER_FROM_BILL>'
+--   WHERE id = '${orphan.id}';
+--
+-- Until then, leave it alone — historical invoices are safely linked here.`;
+    }
 
     return {
       ua: orphan,
+      category,
       invoiceCount: stats.count,
       invoiceTotal: stats.total,
       candidates,
@@ -276,34 +279,30 @@ END $$;`
     };
   });
 
+  const merge       = rows.filter(r => r.category === "merge_target");
+  const review      = rows.filter(r => r.category === "multi_stream_review");
+  const historical  = rows.filter(r => r.category === "historical_only");
   const totalOrphans = rows.length;
   const totalOrphanInvoices = rows.reduce((s, r) => s + r.invoiceCount, 0);
-  const resolvable = rows.filter(r => r.candidates.length > 0).length;
 
   return (
     <>
       <TopBar
         title="Utility Account Audit"
-        subtitle={`${totalOrphans} suspected orphan UAs · ${totalOrphanInvoices.toLocaleString()} invoices · ${resolvable} auto-resolvable`}
+        subtitle={`${totalOrphans} flagged · ${merge.length} auto-merge · ${review.length} review · ${historical.length} historical-only · ${totalOrphanInvoices.toLocaleString()} invoices`}
       />
       <div className="p-8">
-        {/* Diagnostic block — temporary; remove once orphans render correctly */}
-        <div className="card p-4 mb-4 bg-blue-50 border border-blue-200">
-          <div className="text-xs font-semibold text-blue-900 uppercase tracking-wide mb-2">
-            🔍 Diagnostic info (temporary)
-          </div>
-          <pre className="text-xs text-blue-900 whitespace-pre-wrap font-mono">
-            {JSON.stringify(diagnostic, null, 2)}
-          </pre>
-        </div>
-
         {totalOrphans === 0 ? (
           <div className="card p-10 text-center text-nurock-slate">
             <p className="text-lg font-medium text-green-700 mb-1">✓ No orphan UAs detected</p>
             <p className="text-sm">All utility accounts have real account numbers from live bills.</p>
           </div>
         ) : (
-          <OrphanAuditClient rows={rows as any} />
+          <OrphanAuditClient
+            mergeRows={merge as any}
+            reviewRows={review as any}
+            historicalRows={historical as any}
+          />
         )}
       </div>
     </>

@@ -12,6 +12,8 @@ interface CandidateUA {
   vendor: { name: string } | null;
 }
 
+type Category = "merge_target" | "multi_stream_review" | "historical_only";
+
 interface OrphanRow {
   ua: {
     id: string;
@@ -21,13 +23,20 @@ interface OrphanRow {
     vendor: { name: string } | null;
     gl: { code: string; description: string } | null;
   };
+  category: Category;
   invoiceCount: number;
   invoiceTotal: number;
   candidates: CandidateUA[];
   mergeSql: string;
 }
 
-export function OrphanAuditClient({ rows }: { rows: OrphanRow[] }) {
+interface Props {
+  mergeRows: OrphanRow[];
+  reviewRows: OrphanRow[];
+  historicalRows: OrphanRow[];
+}
+
+export function OrphanAuditClient({ mergeRows, reviewRows, historicalRows }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -37,84 +46,120 @@ export function OrphanAuditClient({ rows }: { rows: OrphanRow[] }) {
     setTimeout(() => setCopied(null), 2500);
   }
 
-  const resolvable = rows.filter(r => r.candidates.length > 0);
-  const unresolvable = rows.filter(r => r.candidates.length === 0);
+  const renderRow = (row: OrphanRow) => (
+    <OrphanCard
+      key={row.ua.id}
+      row={row}
+      expanded={expanded === row.ua.id}
+      onToggle={() => setExpanded(expanded === row.ua.id ? null : row.ua.id)}
+      onCopy={() => copySQL(row.ua.id, row.mergeSql)}
+      copied={copied === row.ua.id}
+    />
+  );
 
   return (
     <div className="space-y-6">
-      {/* Summary banner */}
       <div className="card p-5 bg-amber-50 border border-amber-200">
-        <p className="text-sm text-amber-800">
-          <span className="font-semibold">What this means:</span> These utility accounts have
-          placeholder account numbers from the historical import (e.g.{" "}
-          <code className="bg-amber-100 px-1 rounded text-xs">Garbage Total</code>). Live bills
-          can't match to them, so the auto-coder creates a duplicate UA instead. Merge each orphan
-          into its counterpart to fix variance history and prevent future duplicates.
+        <p className="text-sm text-amber-900">
+          <span className="font-semibold">What this page shows:</span> Utility accounts
+          with placeholder account numbers (e.g.{" "}
+          <code className="bg-amber-100 px-1 rounded text-xs">Garbage Total</code>,{" "}
+          <code className="bg-amber-100 px-1 rounded text-xs">nan</code>). Three categories
+          based on what else exists at the same property + GL.
         </p>
       </div>
 
-      {/* Resolvable group */}
-      {resolvable.length > 0 && (
-        <div>
-          <h2 className="text-sm font-semibold text-nurock-navy uppercase tracking-wide mb-3">
-            Auto-resolvable ({resolvable.length})
-          </h2>
-          <div className="space-y-3">
-            {resolvable.map(row => (
-              <OrphanCard
-                key={row.ua.id}
-                row={row}
-                expanded={expanded === row.ua.id}
-                onToggle={() => setExpanded(expanded === row.ua.id ? null : row.ua.id)}
-                onCopy={() => copySQL(row.ua.id, row.mergeSql)}
-                copied={copied === row.ua.id}
-              />
-            ))}
-          </div>
-        </div>
+      {mergeRows.length > 0 && (
+        <Section
+          title="Auto-merge"
+          count={mergeRows.length}
+          tone="green"
+          description="A real (non-placeholder) UA exists at the same property + GL. Safe to merge the orphan into it."
+        >
+          {mergeRows.map(renderRow)}
+        </Section>
       )}
 
-      {/* Unresolvable group */}
-      {unresolvable.length > 0 && (
-        <div>
-          <h2 className="text-sm font-semibold text-nurock-slate uppercase tracking-wide mb-3">
-            Needs manual resolution ({unresolvable.length})
-          </h2>
-          <div className="space-y-3">
-            {unresolvable.map(row => (
-              <OrphanCard
-                key={row.ua.id}
-                row={row}
-                expanded={expanded === row.ua.id}
-                onToggle={() => setExpanded(expanded === row.ua.id ? null : row.ua.id)}
-                onCopy={() => copySQL(row.ua.id, row.mergeSql)}
-                copied={copied === row.ua.id}
-                noCandidate
-              />
-            ))}
-          </div>
-        </div>
+      {reviewRows.length > 0 && (
+        <Section
+          title="Multiple candidates — needs review"
+          count={reviewRows.length}
+          tone="amber"
+          description="More than one real UA at this property + GL (e.g. compactor + recycle). A human must decide which one the orphan's invoices belong to."
+        >
+          {reviewRows.map(renderRow)}
+        </Section>
+      )}
+
+      {historicalRows.length > 0 && (
+        <Section
+          title="Historical-only — fill in account number when next bill arrives"
+          count={historicalRows.length}
+          tone="slate"
+          description="No other UA exists at this property + GL. The orphan IS the canonical UA holding all historical invoices for this vendor at this property. Don't merge — instead, update the account number when the next live bill arrives."
+        >
+          {historicalRows.map(renderRow)}
+        </Section>
       )}
     </div>
   );
 }
 
+function Section({
+  title, count, tone, description, children,
+}: {
+  title: string;
+  count: number;
+  tone: "green" | "amber" | "slate";
+  description: string;
+  children: React.ReactNode;
+}) {
+  const toneClasses = {
+    green: "text-green-800",
+    amber: "text-amber-800",
+    slate: "text-nurock-slate",
+  }[tone];
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1">
+        <h2 className={cn("text-sm font-semibold uppercase tracking-wide", toneClasses)}>
+          {title} ({count})
+        </h2>
+      </div>
+      <p className="text-xs text-nurock-slate mb-3">{description}</p>
+      <div className="space-y-3">{children}</div>
+    </div>
+  );
+}
+
 function OrphanCard({
-  row, expanded, onToggle, onCopy, copied, noCandidate,
+  row, expanded, onToggle, onCopy, copied,
 }: {
   row: OrphanRow;
   expanded: boolean;
   onToggle: () => void;
   onCopy: () => void;
   copied: boolean;
-  noCandidate?: boolean;
 }) {
-  const { ua, invoiceCount, invoiceTotal, candidates, mergeSql } = row;
-  const target = candidates[0];
+  const { ua, category, invoiceCount, invoiceTotal, candidates, mergeSql } = row;
+
+  const badgeStyle = {
+    merge_target: "bg-green-100 text-green-700",
+    multi_stream_review: "bg-amber-100 text-amber-800",
+    historical_only: "bg-gray-100 text-gray-700",
+  }[category];
+
+  const badgeLabel = {
+    merge_target: "Auto-merge",
+    multi_stream_review: "Review",
+    historical_only: "Historical-only",
+  }[category];
 
   return (
-    <div className={cn("card", noCandidate ? "border-red-200 bg-red-50/30" : "")}>
-      {/* Header row */}
+    <div className={cn(
+      "card",
+      category === "historical_only" && "border-gray-200 bg-gray-50/40",
+    )}>
       <button
         onClick={onToggle}
         className="w-full flex items-start justify-between gap-4 p-5 text-left"
@@ -127,11 +172,8 @@ function OrphanCard({
             <span className="text-xs text-nurock-slate font-mono bg-gray-100 px-2 py-0.5 rounded">
               GL {ua.gl?.code}
             </span>
-            <span className={cn(
-              "badge text-xs",
-              noCandidate ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700",
-            )}>
-              {noCandidate ? "No candidate" : "Resolvable"}
+            <span className={cn("badge text-xs", badgeStyle)}>
+              {badgeLabel}
             </span>
           </div>
           <div className="mt-1">
@@ -157,50 +199,61 @@ function OrphanCard({
         </span>
       </button>
 
-      {/* Expanded detail */}
       {expanded && (
         <div className="px-5 pb-5 border-t border-gray-100 pt-4 space-y-4">
-          {/* Merge target */}
-          {target ? (
+          {category === "merge_target" && candidates[0] && (
             <div>
               <div className="text-xs font-semibold text-nurock-slate uppercase tracking-wide mb-2">
                 Merge target
               </div>
               <div className="bg-green-50 border border-green-200 rounded p-3 text-sm">
-                <div className="font-medium text-green-800">{target.vendor?.name ?? ua.vendor?.name}</div>
+                <div className="font-medium text-green-800">{candidates[0].vendor?.name ?? ua.vendor?.name}</div>
                 <div className="text-green-700 text-xs mt-0.5">
-                  acct: <code>{target.account_number}</code>
-                  &nbsp;·&nbsp;{target.invoiceCount} invoices
-                  &nbsp;·&nbsp;${target.invoiceTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  acct: <code>{candidates[0].account_number}</code>
+                  &nbsp;·&nbsp;{candidates[0].invoiceCount} invoices
+                  &nbsp;·&nbsp;${candidates[0].invoiceTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
               </div>
             </div>
-          ) : (
-            <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700">
-              No active UA found at property {ua.property?.code} with GL {ua.gl?.code}.
-              You'll need to create the target UA first, then merge manually.
-            </div>
           )}
 
-          {/* Other candidates */}
-          {candidates.length > 1 && (
+          {category === "multi_stream_review" && candidates.length > 0 && (
             <div>
-              <div className="text-xs text-nurock-slate mb-1">
-                Other candidates at this property + GL:
+              <div className="text-xs font-semibold text-nurock-slate uppercase tracking-wide mb-2">
+                Possible merge targets ({candidates.length})
               </div>
-              {candidates.slice(1).map(c => (
-                <div key={c.id} className="text-xs text-nurock-slate font-mono">
-                  {c.account_number} · {c.invoiceCount} invoices
-                </div>
-              ))}
+              <div className="space-y-2">
+                {candidates.map(c => (
+                  <div key={c.id} className="bg-amber-50 border border-amber-200 rounded p-3 text-sm">
+                    <div className="font-medium text-amber-900">{c.vendor?.name}</div>
+                    <div className="text-amber-800 text-xs mt-0.5">
+                      acct: <code>{c.account_number}</code>
+                      &nbsp;·&nbsp;{c.invoiceCount} invoices
+                      &nbsp;·&nbsp;${c.invoiceTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
-          {/* SQL */}
+          {category === "historical_only" && (
+            <div className="bg-gray-50 border border-gray-200 rounded p-3 text-sm text-gray-700">
+              <p>
+                This is the only UA for {ua.vendor?.name} at {ua.property?.code} / GL {ua.gl?.code}.
+                Its account number is a placeholder from the historical import. When the next live
+                bill arrives for this vendor at this property, copy the real account number from the
+                bill and update this UA — don't create a new one.
+              </p>
+            </div>
+          )}
+
           <div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-semibold text-nurock-slate uppercase tracking-wide">
-                Merge SQL (run in Supabase console)
+                {category === "merge_target" ? "Merge SQL"
+                  : category === "multi_stream_review" ? "Manual merge template"
+                  : "Reference SQL (when bill arrives)"}
               </span>
               <button
                 onClick={onCopy}
