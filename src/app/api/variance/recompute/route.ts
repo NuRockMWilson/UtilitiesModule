@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { computeVariance, type PriorInvoice } from "@/lib/variance";
+import { requireAdmin } from "@/lib/admin-auth";
 
 /**
  * Variance recompute endpoint.
@@ -18,14 +19,23 @@ import { computeVariance, type PriorInvoice } from "@/lib/variance";
  *
  * Returns counts of accounts processed, invoices evaluated, invoices flagged.
  *
- * No auth gate yet — when role-based access lands, this should be admin-only.
+ * Admin-only. Authorized via either:
+ *   - x-admin-api-key header (cron / scripts / curl), or
+ *   - Authenticated session for a user_profiles.role = 'admin' user.
+ *
+ * Uses the service-role Supabase client for the actual work so RLS does
+ * not silently drop accounts the caller can't see — this is a portfolio-
+ * wide system operation, not a user-scoped one.
  */
 export async function POST(req: Request) {
+  const auth = await requireAdmin(req);
+  if (!auth.ok) return auth.response;
+
   const url = new URL(req.url);
   const propertyId = url.searchParams.get("propertyId");
   const dryRun     = url.searchParams.get("dryRun") === "1";
 
-  const supabase = createSupabaseServerClient();
+  const supabase = createSupabaseServiceClient();
 
   // 1. Pull every active utility account (optionally scoped to one property)
   let accountsQ = supabase
@@ -135,5 +145,6 @@ export async function POST(req: Request) {
     unflagged:    totalUnflagged,
     errors:       errors.slice(0, 20),
     moreErrors:   Math.max(0, errors.length - 20),
+    actor:        auth.principal,
   });
 }

@@ -3,6 +3,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { extractBill } from "@/lib/extraction";
 import { computeVariance } from "@/lib/variance";
 import { formatGLCoding, inferGLCode } from "@/lib/coding";
+import { resolveVendor } from "@/lib/vendor-resolver";
 
 export async function POST(_: Request, { params }: { params: { invoiceId: string } }) {
   const supabase = createSupabaseServiceClient();
@@ -80,6 +81,24 @@ export async function POST(_: Request, { params }: { params: { invoiceId: string
           gl_code: gl.code,
           sub_code: ua.sub_code,
         });
+      }
+    } else {
+      // No existing UA for this account number.
+      // Use property-aware vendor resolver to avoid picking the wrong variant
+      // (e.g. Republic - Duncan Disposal instead of Republic Services Inc.)
+      const resolved = await resolveVendor(supabase, {
+        extractedVendorName: extracted.vendor_name,
+        propertyId: propertyId ?? null,
+        accountNumber: extracted.account_number,
+      });
+      if (resolved.vendorId) {
+        vendorId = resolved.vendorId;
+      }
+      if (resolved.confidence !== "none") {
+        extracted.warnings = [
+          ...extracted.warnings,
+          `Vendor resolved via ${resolved.confidence}: ${resolved.debug}`,
+        ];
       }
     }
   }
