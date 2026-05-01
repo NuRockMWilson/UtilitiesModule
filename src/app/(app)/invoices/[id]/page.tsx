@@ -198,6 +198,49 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
         {/* Right: fields, variance, approval */}
         <div className="space-y-6">
           {/*
+            Multi-account / multi-service banner. When the extraction
+            detector flags this bill as covering multiple properties or
+            mixing services on different GLs, surface it prominently above
+            the bill detail editor so the reviewer can't miss it. The
+            warnings themselves still appear in the regular extraction
+            warnings card on the left, but the banner gives one-glance
+            visibility on the right where the action buttons are.
+          */}
+          {(() => {
+            const warnings = invoice.extraction_warnings ?? [];
+            const multiAccountWarning = warnings.find((w: string) =>
+              w.startsWith("[Suspected multi-property")
+              || w.startsWith("[Suspected multi-service")
+              || w.startsWith("[Bill structure unclear]")
+            );
+            if (!multiAccountWarning) return null;
+
+            const isMultiProperty = multiAccountWarning.startsWith("[Suspected multi-property");
+            const headerText = isMultiProperty
+              ? "Possible multi-property bill"
+              : multiAccountWarning.startsWith("[Suspected multi-service")
+                ? "Possible multi-service bill"
+                : "Bill structure needs verification";
+            return (
+              <div className="card p-4 border-l-4 border-l-amber-500 bg-amber-50">
+                <div className="text-xs uppercase tracking-wide text-amber-800 font-semibold mb-1">
+                  ⚠ {headerText}
+                </div>
+                <p className="text-sm text-amber-900 leading-relaxed">
+                  {multiAccountWarning.replace(/^\[[^\]]+\]\s*/, "")}
+                </p>
+                {isMultiProperty && (
+                  <p className="text-xs text-amber-800 mt-2">
+                    Do not approve this bill as-is if it covers multiple properties — the dollars
+                    will post to the wrong GL accounts. Either split the bill manually before
+                    posting, or reject it back to AP.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
+          {/*
             Bill details — editable when the invoice is in any pre-approval
             state. Falls back to raw extraction values when FK joins are
             empty so the page reflects what was extracted even before

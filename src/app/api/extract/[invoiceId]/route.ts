@@ -4,6 +4,7 @@ import { extractBill } from "@/lib/extraction";
 import { computeVariance } from "@/lib/variance";
 import { formatGLCoding, inferGLCode } from "@/lib/coding";
 import { resolveVendor } from "@/lib/vendor-resolver";
+import { detectMultiAccountSignals } from "@/lib/extraction-multiaccount";
 
 export async function POST(_: Request, { params }: { params: { invoiceId: string } }) {
   const supabase = createSupabaseServiceClient();
@@ -43,6 +44,21 @@ export async function POST(_: Request, { params }: { params: { invoiceId: string
       })
       .eq("id", invoice.id);
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+  }
+
+  // Multi-account / multi-service detector — runs against the parsed
+  // extraction. Appends warnings if the bill looks like it covers
+  // multiple properties or mixes service categories on different GLs.
+  // Detector is non-destructive: it only adds warnings; it never modifies
+  // the extracted data or short-circuits the rest of the pipeline.
+  //
+  // We persist the warnings via the existing extraction_warnings array
+  // column — no schema change required. The UI checks for warnings
+  // beginning with "[Suspected multi-" or "[Bill structure" to render
+  // the multi-account banner on the invoice detail page.
+  const multiSignal = detectMultiAccountSignals(extracted);
+  if (multiSignal.warnings.length > 0) {
+    extracted.warnings = [...extracted.warnings, ...multiSignal.warnings];
   }
 
   // Resolve utility account by vendor + account number if not already linked
