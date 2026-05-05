@@ -15,15 +15,49 @@ interface StatusCount {
 async function loadDashboard(propertyId: string | null) {
   const supabase = createSupabaseServerClient();
 
-  let q = supabase
+  // PostgREST caps single-shot queries at 1000 rows by default. Once
+  // the historical baseline + active queue cross that threshold (which
+  // it does as soon as you have a few hundred posted invoices), a
+  // single .select() silently truncates and the dashboard counts
+  // become wrong — typically losing whichever rows sort to the end.
+  //
+  // Strategy: HEAD count first, then paginate in parallel. Same pattern
+  // the invoices page already uses. The columns we select are tiny so
+  // even at 50k rows the round-trips are fast.
+  const PAGE_SIZE = 1000;
+  const MAX_ROWS  = 50_000;
+
+  function buildBase() {
+    let q = supabase
+      .from("invoices")
+      .select("status, total_amount_due, variance_flagged, due_date, property_id")
+      .not("status", "in", "(paid,rejected)");
+    if (propertyId) q = q.eq("property_id", propertyId);
+    return q;
+  }
+
+  // 1. HEAD count
+  let countQ = supabase
     .from("invoices")
-    .select("status, total_amount_due, variance_flagged, due_date, property_id")
+    .select("status", { count: "exact", head: true })
     .not("status", "in", "(paid,rejected)");
-  if (propertyId) q = q.eq("property_id", propertyId);
+  if (propertyId) countQ = countQ.eq("property_id", propertyId);
+  const { count: totalRowCount } = await countQ;
+  const total = Math.min(totalRowCount ?? 0, MAX_ROWS);
 
-  const { data: invoices } = await q;
+  // 2. Pages in parallel
+  const pageCount = Math.ceil(total / PAGE_SIZE);
+  const pages = await Promise.all(
+    Array.from({ length: pageCount }, (_, i) =>
+      buildBase()
+        .order("submitted_at", { ascending: false })
+        .order("id",           { ascending: true })   // stable tiebreaker
+        .range(i * PAGE_SIZE, i * PAGE_SIZE + PAGE_SIZE - 1)
+        .then(r => r.data ?? []),
+    ),
+  );
 
-  const rows = invoices ?? [];
+  const rows = pages.flat();
   const byStatus = new Map<InvoiceStatus, StatusCount>();
   let flagged = 0;
   let dueSoon = 0;

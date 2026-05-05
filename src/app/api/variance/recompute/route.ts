@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { computeVariance, type PriorInvoice } from "@/lib/variance";
-import { requireAdmin } from "@/lib/admin-auth";
+import { requireTester } from "@/lib/admin-auth";
 
 /**
  * Variance recompute endpoint.
@@ -19,7 +19,7 @@ import { requireAdmin } from "@/lib/admin-auth";
  *
  * Returns counts of accounts processed, invoices evaluated, invoices flagged.
  *
- * Admin-only. Authorized via either:
+ * Admin OR tester. Authorized via either:
  *   - x-admin-api-key header (cron / scripts / curl), or
  *   - Authenticated session for a user_profiles.role = 'admin' user.
  *
@@ -28,7 +28,7 @@ import { requireAdmin } from "@/lib/admin-auth";
  * wide system operation, not a user-scoped one.
  */
 export async function POST(req: Request) {
-  const auth = await requireAdmin(req);
+  const auth = await requireTester(req);
   if (!auth.ok) return auth.response;
 
   const url = new URL(req.url);

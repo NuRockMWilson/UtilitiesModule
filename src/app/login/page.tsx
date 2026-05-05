@@ -10,9 +10,15 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
  *   Stage 1: user enters email → Supabase sends a 6-digit code
  *   Stage 2: user enters code → app verifies and creates a session
  *
- * `shouldCreateUser: false` means admins must pre-provision users in the
- * Supabase dashboard (Authentication → Users → Add user) before they can
- * sign in. Flip to `true` if you want open self-signup.
+ * `shouldCreateUser: true` means anyone with a valid email can sign in.
+ * On first signup, a Postgres trigger (see migration 0027) auto-creates
+ * a user_profiles row with role='viewer' — the pending-approval state.
+ * Middleware then redirects viewer users to /pending-approval until an
+ * admin elevates their role to 'admin' or 'tester' in /admin/users.
+ *
+ * If you ever need to lock signup down (e.g. for production), set
+ * `shouldCreateUser: false` here and provision users manually via the
+ * Supabase dashboard.
  */
 export default function LoginPage() {
   const router = useRouter();
@@ -30,21 +36,12 @@ export default function LoginPage() {
     const supabase = createSupabaseBrowserClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: false },
+      options: { shouldCreateUser: true },
     });
 
     setLoading(false);
     if (error) {
-      // Supabase returns "Signups not allowed for otp" when the email isn't
-      // already a user. The dashboard is invite-only; show a friendlier message.
-      if (/signups not allowed/i.test(error.message)) {
-        setErr(
-          `${email} is not authorized to sign in. The NuRock Utilities AP dashboard ` +
-          `is invite-only — ask an admin to add your account in Supabase before signing in.`,
-        );
-      } else {
-        setErr(error.message);
-      }
+      setErr(error.message);
     } else {
       setStage("code");
     }
@@ -101,7 +98,8 @@ export default function LoginPage() {
         {stage === "email" && (
           <>
             <p className="text-sm text-nurock-slate-light mb-6">
-              Enter your NuRock email to receive a 6-digit sign-in code.
+              Enter your email to receive a 6-digit sign-in code. New accounts
+              will need to be approved by an admin before access is granted.
             </p>
             <form onSubmit={sendCode} className="space-y-4">
               <div>

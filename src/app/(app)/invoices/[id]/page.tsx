@@ -13,6 +13,8 @@ import { DeleteInvoiceButton } from "@/components/invoices/DeleteInvoiceButton";
 import { EditableBillDetails, type EditableInvoice } from "@/components/invoices/EditableBillDetails";
 import { DistributionsPanel, type DistributionLine } from "@/components/invoices/DistributionsPanel";
 import { AttachPdfButton } from "@/components/invoices/AttachPdfButton";
+import { ExtractChildrenButton } from "@/components/invoices/ExtractChildrenButton";
+import { trackerRouteForInvoice } from "@/lib/tracker-route";
 
 export default async function InvoiceDetailPage({ params }: { params: { id: string } }) {
   const supabase = createSupabaseServerClient();
@@ -47,6 +49,29 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
     .select("*")
     .eq("invoice_id", params.id)
     .order("sent_at", { ascending: false });
+
+  // ── Compiled-PDF relationships ──────────────────────────────────────
+  // If this invoice is a compiled_parent, load its children. If this
+  // invoice is itself a child (parent_invoice_id is set), load the
+  // parent for breadcrumb display.
+  const isCompiledParent = invoice.status === "compiled_parent";
+  const parentInvoiceId  = (invoice as any).parent_invoice_id ?? null;
+
+  const { data: childInvoices } = isCompiledParent
+    ? await supabase
+        .from("invoices")
+        .select("id, status, vendor_id, total_amount_due, current_charges, raw_extraction, vendor:vendors(name)")
+        .eq("parent_invoice_id", params.id)
+        .order("created_at", { ascending: true })
+    : { data: null };
+
+  const { data: parentInvoice } = parentInvoiceId
+    ? await supabase
+        .from("invoices")
+        .select("id, status, pdf_path, vendor:vendors(name)")
+        .eq("id", parentInvoiceId)
+        .single()
+    : { data: null };
 
   // Distribution lines + the active GL list for the editor combobox.
   const [{ data: lineRows }, { data: glAccountsForEditor }] = await Promise.all([
@@ -197,6 +222,86 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
 
         {/* Right: fields, variance, approval */}
         <div className="space-y-6">
+          {/*
+            Compiled-PDF context. When this invoice is itself a child
+            (split off from a compiled-parent), show a breadcrumb back
+            to the parent so reviewers can see the origin context. When
+            this invoice IS the compiled parent, show its children
+            instead — with a button to trigger extraction on any still
+            in extracting state.
+          */}
+          {parentInvoice && (
+            <div className="card p-4 border-l-4 border-l-nurock-navy bg-nurock-cream">
+              <div className="text-xs uppercase tracking-wide text-nurock-slate font-semibold mb-1">
+                Split from compiled PDF
+              </div>
+              <p className="text-sm text-ink">
+                This invoice was extracted from a multi-bill PDF.{" "}
+                <Link
+                  href={`/invoices/${parentInvoice.id}`}
+                  className="text-nurock-navy underline hover:no-underline"
+                >
+                  View source PDF
+                </Link>
+              </p>
+            </div>
+          )}
+
+          {isCompiledParent && (
+            <div className="card p-5 border-l-4 border-l-nurock-navy bg-nurock-cream space-y-4">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-nurock-slate font-semibold mb-1">
+                  Compiled PDF — {(childInvoices ?? []).length} bill{(childInvoices ?? []).length === 1 ? "" : "s"}
+                </div>
+                <p className="text-sm text-ink">
+                  This PDF contained multiple distinct bills, split into separate
+                  invoices. The original PDF is preserved here as an audit artifact.
+                  Approve and post each child individually below.
+                </p>
+              </div>
+
+              {/* Child list */}
+              {(childInvoices ?? []).length > 0 && (
+                <ul className="divide-y divide-nurock-border border-y border-nurock-border">
+                  {(childInvoices ?? []).map((c: any) => (
+                    <li key={c.id} className="py-2 flex items-center justify-between gap-3 text-sm">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Link
+                          href={`/invoices/${c.id}`}
+                          className="text-nurock-navy hover:underline truncate"
+                        >
+                          {c.vendor?.name ?? "(extracting…)"}
+                          {c.raw_extraction?.structure_hint?.account_number && (
+                            <span className="text-nurock-slate ml-2">
+                              {c.raw_extraction.structure_hint.account_number}
+                            </span>
+                          )}
+                        </Link>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <span className="text-nurock-slate font-mono">
+                          {c.total_amount_due !== null && c.total_amount_due !== undefined
+                            ? formatDollars(c.total_amount_due)
+                            : c.raw_extraction?.structure_hint?.total_amount !== undefined
+                              ? formatDollars(c.raw_extraction.structure_hint.total_amount)
+                              : "—"}
+                        </span>
+                        <StatusPill status={c.status as InvoiceStatus} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <ExtractChildrenButton
+                parentId={invoice.id}
+                pendingCount={(childInvoices ?? []).filter(
+                  (c: any) => c.status === "extracting",
+                ).length}
+              />
+            </div>
+          )}
+
           {/*
             Multi-account / multi-service banner. When the extraction
             detector flags this bill as covering multiple properties or
@@ -435,9 +540,34 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
       </div>
 
       <div className="px-8 pb-8 flex items-center justify-between gap-4">
-        <Link href="/invoices" className="text-sm text-nurock-navy hover:underline">
-          ← Back to invoices
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link href="/invoices" className="text-sm text-nurock-navy hover:underline">
+            ← Back to invoices
+          </Link>
+          {(() => {
+            // Tracker breadcrumb: navigate back to the property tracker
+            // tab that aggregates this invoice's GL. When a user clicks
+            // through from the House Meters tracker, they expect to be
+            // able to return there with one click — not to the global
+            // invoices list.
+            const tracker = trackerRouteForInvoice(
+              (invoice.property as any)?.code ?? null,
+              (invoice.gl as any)?.code ?? null,
+            );
+            if (!tracker) return null;
+            return (
+              <>
+                <span className="text-nurock-slate-light text-sm">·</span>
+                <Link
+                  href={tracker.href}
+                  className="text-sm text-nurock-navy hover:underline"
+                >
+                  → {tracker.label}
+                </Link>
+              </>
+            );
+          })()}
+        </div>
         <DeleteInvoiceButton invoiceId={invoice.id} />
       </div>
     </>

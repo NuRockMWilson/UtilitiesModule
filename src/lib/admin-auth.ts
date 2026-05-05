@@ -135,3 +135,87 @@ export async function requireAdmin(req: Request): Promise<AdminAuthResult> {
     principal: { type: "user", userId: user.id, email: user.email ?? "" },
   };
 }
+
+/**
+ * Tester-or-better gate for non-destructive routes.
+ *
+ * Allows: admin users, tester users, and the API-key path.
+ * Rejects: viewer (pending), inactive, no-profile, unauthenticated.
+ *
+ * Use this for routes that mutate state but don't have external side
+ * effects — uploading bills, editing invoice fields, approving invoices,
+ * running variance recompute, adding variance notes, etc.
+ *
+ * Use `requireAdmin` instead for genuinely destructive operations:
+ * Sage posting, role management, deletes, sending external emails, etc.
+ */
+export async function requireTester(req: Request): Promise<AdminAuthResult> {
+  // API key path — same as requireAdmin. The key is admin-equivalent
+  // by design (used by cron jobs and developer scripts).
+  const presentedKey = req.headers.get("x-admin-api-key");
+  const expectedKey  = process.env.ADMIN_API_KEY;
+
+  if (presentedKey) {
+    if (!expectedKey) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: "Server misconfiguration: ADMIN_API_KEY not set" },
+          { status: 500 },
+        ),
+      };
+    }
+    if (safeEqual(presentedKey, expectedKey)) {
+      return { ok: true, principal: { type: "api_key", label: "admin_api_key" } };
+    }
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Invalid API key" }, { status: 401 }),
+    };
+  }
+
+  // Cookie path — accept admin OR tester
+  const supabase = createSupabaseServerClient();
+  const { data: { user }, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !user) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+    };
+  }
+
+  const { data: profile, error: profErr } = await supabase
+    .from("user_profiles")
+    .select("role, active")
+    .eq("id", user.id)
+    .single();
+
+  if (profErr || !profile) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "No user profile" }, { status: 403 }),
+    };
+  }
+  if (!profile.active) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Account inactive" }, { status: 403 }),
+    };
+  }
+  // Anyone except viewer / property_manager / ap_clerk / approver. We only
+  // accept the two roles we currently use. The legacy enum values still
+  // exist in the schema but aren't wired up — when RBAC lands properly,
+  // this gate becomes more granular.
+  if (profile.role !== "admin" && profile.role !== "tester") {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Tester or admin role required" }, { status: 403 }),
+    };
+  }
+
+  return {
+    ok: true,
+    principal: { type: "user", userId: user.id, email: user.email ?? "" },
+  };
+}
+

@@ -10,10 +10,11 @@ export type UtilityCategory =
 export type InvoiceStatus =
   | "new" | "extracting" | "extraction_failed" | "needs_coding"
   | "needs_variance_note" | "ready_for_approval" | "approved"
-  | "posted_to_sage" | "paid" | "rejected" | "on_hold";
+  | "posted_to_sage" | "paid" | "rejected" | "on_hold"
+  | "compiled_parent";
 
 export type SageSystem = "sage_300_cre" | "sage_intacct";
-export type UserRole = "admin" | "ap_clerk" | "approver" | "property_manager" | "viewer";
+export type UserRole = "admin" | "tester" | "ap_clerk" | "approver" | "property_manager" | "viewer";
 export type BillSource = "email" | "portal" | "upload" | "scan" | "manual";
 
 export interface Property {
@@ -236,6 +237,7 @@ export const STATUS_LABEL: Record<InvoiceStatus, string> = {
   paid: "Paid",
   rejected: "Rejected",
   on_hold: "On hold",
+  compiled_parent: "Compiled PDF",
 };
 
 export const STATUS_COLOR: Record<InvoiceStatus, string> = {
@@ -250,4 +252,5 @@ export const STATUS_COLOR: Record<InvoiceStatus, string> = {
   paid: "bg-green-200 text-green-900",
   rejected: "bg-red-100 text-red-800",
   on_hold: "bg-tan-200 text-tan-900",
+  compiled_parent: "bg-navy-100 text-navy-800",
 };

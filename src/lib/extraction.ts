@@ -38,6 +38,38 @@ export const ExtractedUsageReading = z.object({
   usage_unit:   nullish(z.string()),
 });
 
+/**
+ * Sub-bill structure detected by the extractor when a PDF contains
+ * multiple distinct bills (a "compiled" PDF), or a single bill with
+ * many pages of unit-level detail (a "long_detail" bill).
+ *
+ * The extractor doesn't know our property/account mappings — it just
+ * reports what it sees. The route handler decides what to do with
+ * the structure: split-and-re-extract for compiled, mark-for-unit-
+ * detail-processing for long_detail.
+ */
+export const ExtractedSubBill = z.object({
+  page_start:     z.number().int().min(1),
+  page_end:       z.number().int().min(1),
+  account_number: nullish(z.string()),
+  service_address: nullish(z.string()),
+  total_amount:   nullish(z.number()),
+});
+
+export const BillStructure = z.object({
+  type: z.enum(["single", "long_detail", "compiled"]).default("single"),
+  // For compiled PDFs: the sub-bills found. Empty for single/long_detail.
+  sub_bills: z.array(ExtractedSubBill).default([]),
+  // Confidence in the structure assessment (0..1). Below 0.85 the route
+  // handler should fall back to single-bill processing per the agreed
+  // safety policy (Q2-(a)).
+  confidence: z.number().min(0).max(1).default(1),
+  notes:      nullish(z.string()),
+});
+
+export type BillStructureT = z.infer<typeof BillStructure>;
+export type ExtractedSubBillT = z.infer<typeof ExtractedSubBill>;
+
 export const ExtractedBill = z.object({
   vendor_name:           nullish(z.string()),
   account_number:        nullish(z.string()),
@@ -68,6 +100,11 @@ export const ExtractedBill = z.object({
   }).default({ line_items_sum: null, matches_total: false, delta: null }),
   extraction_confidence: z.number().min(0).max(1).default(0),
   warnings:              z.array(z.string()).default([]),
+
+  // NEW: Structure detection — set by the model when it notices the PDF
+  // is not a single normal bill. Defaults to single-bill semantics so
+  // existing callers don't need to special-case this.
+  bill_structure: BillStructure.default({ type: "single", sub_bills: [], confidence: 1, notes: null }),
 });
 
 export type ExtractedBillT = z.infer<typeof ExtractedBill>;
@@ -104,7 +141,15 @@ Respond with a single JSON object — no markdown, no prose, no code fences — 
     "delta":          number | null           // Computed delta if reconciliation fails; null if matches
   },
   "extraction_confidence": number,           // 0.0 to 1.0. Below 0.85 triggers human review.
-  "warnings": [string]                       // One string per noteworthy ambiguity
+  "warnings": [string],                      // One string per noteworthy ambiguity
+  "bill_structure": {                        // Detect whether this PDF contains 1 normal bill, 1 long bill with unit-level detail, or multiple distinct bills.
+    "type":  "single" | "long_detail" | "compiled",
+    "sub_bills": [                           // Empty for "single" and "long_detail". Required for "compiled".
+      { "page_start": int, "page_end": int, "account_number": string|null, "service_address": string|null, "total_amount": number|null }
+    ],
+    "confidence": number,                    // 0..1. Use <0.85 if you're unsure whether it's compiled vs single.
+    "notes": string | null
+  }
 }
 
 Critical rules:
@@ -112,10 +157,26 @@ Critical rules:
 - Dates ALWAYS in YYYY-MM-DD. Use null if not stated.
 - Amounts are unsigned-or-signed numbers WITHOUT currency symbols, WITHOUT commas, WITHOUT trailing "CR". A "$5,369.08CR" credit balance is the number -5369.08.
 - account_number ≠ invoice_number. They are usually two different fields printed near each other on the bill.
-- Multi-page rolled-up bills (e.g. utility bills with 14 sub-accounts on consecutive pages): extract data from PAGE ONE only — that page's account number, total, etc. The system processes one PDF = one invoice today.
 - Downgrade extraction_confidence for: faded/scanned bills with OCR noise, multiple conflicting totals, handwritten amounts, unusual layouts.
 - Add a warning string for: credit balances, partial payments, budget billing, bill consolidation across multiple accounts, rate changes announced on the bill.
-- If the document is NOT a utility bill (notice letter, legal demand, advertising), return all nullable fields as null, extraction_confidence=0, and a warning explaining what the document is.`;
+- If the document is NOT a utility bill (notice letter, legal demand, advertising), return all nullable fields as null, extraction_confidence=0, and a warning explaining what the document is.
+
+Bill structure rules — read this carefully, it controls how the bill gets processed downstream:
+
+- "single": ONE bill, normal length (typically 1-4 pages). Most common case. Top-level fields describe the whole bill.
+
+- "long_detail": ONE bill (one account, one period, one total) but with many pages of per-unit detail. Common for master-account vacant-unit electric bills (e.g. Austin Energy Onion Creek 100+ pages, where page 1 is the summary and subsequent pages list each unit's individual meter read and charges). 
+  Signal: one consistent account number across all pages, one "Total Amount Due" on page 1, but many subsequent pages of repeating per-unit blocks.
+  When you see this: top-level fields describe PAGE 1 (the summary) — the account_number, total_amount_due, service_period etc. from page 1. Set bill_structure.type = "long_detail" so downstream processing knows to extract per-unit detail in a separate pass.
+
+- "compiled": MULTIPLE distinct bills concatenated into one PDF. Common for vendor portals that batch a customer's monthly statements together (e.g. Georgia Power 7 separate accounts in one 14-page download). Each sub-bill has its OWN account number, OWN service address, OWN total due.
+  Signal: account number changes between page groups; multiple distinct "Total Due" amounts on different pages; multiple distinct service addresses.
+  When you see this: 
+    1. Set bill_structure.type = "compiled".
+    2. Populate bill_structure.sub_bills with one entry per detected sub-bill (page_start/end inclusive, account_number, service_address, total_amount).
+    3. Top-level fields should describe the FIRST sub-bill (page 1's bill) — they'll be discarded by downstream processing but need to be present and valid. Don't try to roll up totals across sub-bills.
+
+- Confidence: if you're not sure whether a multi-page PDF is "long_detail" vs "compiled" vs "single", err toward "single" with confidence < 0.85. The downstream system has a fallback that handles ambiguous cases safely.`;
 
 /**
  * Supported input shapes for extraction.
@@ -187,7 +248,7 @@ export async function extractBill(input: ExtractInput): Promise<ExtractedBillT> 
 
   const response = await client.messages.create({
     model,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: SYSTEM_PROMPT,
     // Cast to any — the Anthropic API accepts `document` content blocks for
     // native PDF input, but @anthropic-ai/sdk@0.30.1's TypeScript types only

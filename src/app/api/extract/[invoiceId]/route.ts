@@ -3,8 +3,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { extractBill } from "@/lib/extraction";
 import { computeVariance } from "@/lib/variance";
 import { formatGLCoding, inferGLCode } from "@/lib/coding";
-import { resolveVendor } from "@/lib/vendor-resolver";
-import { detectMultiAccountSignals } from "@/lib/extraction-multiaccount";
+import { processCompiledBill } from "@/lib/extraction-compiled";
 
 export async function POST(_: Request, { params }: { params: { invoiceId: string } }) {
   const supabase = createSupabaseServiceClient();
@@ -30,7 +29,12 @@ export async function POST(_: Request, { params }: { params: { invoiceId: string
     return NextResponse.json({ error: `PDF download failed: ${dlErr?.message}` }, { status: 500 });
   }
 
-  const pdfBase64 = Buffer.from(await pdfFile.arrayBuffer()).toString("base64");
+  // Keep both raw bytes (for potential PDF splitting if compiled) and
+  // the base64 form (for the LLM call). The base64 is a one-time alloc
+  // so we don't pay for it twice in the compiled-PDF path.
+  const pdfArrayBuffer = await pdfFile.arrayBuffer();
+  const pdfBytes       = new Uint8Array(pdfArrayBuffer);
+  const pdfBase64      = Buffer.from(pdfArrayBuffer).toString("base64");
 
   let extracted;
   try {
@@ -46,19 +50,60 @@ export async function POST(_: Request, { params }: { params: { invoiceId: string
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 
-  // Multi-account / multi-service detector — runs against the parsed
-  // extraction. Appends warnings if the bill looks like it covers
-  // multiple properties or mixes service categories on different GLs.
-  // Detector is non-destructive: it only adds warnings; it never modifies
-  // the extracted data or short-circuits the rest of the pipeline.
+  // ── Bill structure branch ──────────────────────────────────────────
+  // The extractor reports whether this PDF is a single bill, a long
+  // single-account bill with unit-level detail, or a compiled PDF
+  // containing multiple distinct bills.
   //
-  // We persist the warnings via the existing extraction_warnings array
-  // column — no schema change required. The UI checks for warnings
-  // beginning with "[Suspected multi-" or "[Bill structure" to render
-  // the multi-account banner on the invoice detail page.
-  const multiSignal = detectMultiAccountSignals(extracted);
-  if (multiSignal.warnings.length > 0) {
-    extracted.warnings = [...extracted.warnings, ...multiSignal.warnings];
+  // For "compiled" with sufficient confidence (≥0.85 per the agreed
+  // safety policy Q2-(a)): split the PDF, create N child invoices,
+  // mark this row as compiled_parent. The route returns immediately;
+  // child extractions are triggered separately to avoid timeouts.
+  //
+  // For "long_detail": continue with normal single-bill processing
+  // (the extractor already pulled the page-1 summary). Phase 2 will
+  // add per-unit extraction in a follow-up pass; for now we just
+  // surface a warning so testers know this is a long bill.
+  //
+  // For "single" or low-confidence "compiled": fall through to normal
+  // single-bill processing. Existing multi-account banner will catch
+  // any compiled PDFs we under-classified.
+  const structure = extracted.bill_structure;
+
+  if (
+    structure?.type === "compiled" &&
+    structure.confidence >= 0.85 &&
+    structure.sub_bills.length >= 2
+  ) {
+    const result = await processCompiledBill({
+      supabase,
+      parentInvoiceId: invoice.id,
+      parentPdfPath:   invoice.pdf_path,
+      parentPdfBytes:  pdfBytes,
+      subBills:        structure.sub_bills,
+    });
+
+    return NextResponse.json({
+      success: true,
+      shape:   "compiled",
+      parent_id: result.parentId,
+      child_ids: result.childIds,
+      child_paths: result.childPaths,
+      errors:    result.errors,
+      message:   `Detected ${structure.sub_bills.length} sub-bills. Created ${result.childIds.length} child invoices. ` +
+                 (result.errors.length > 0 ? `${result.errors.length} errors during split.` : "Run extraction on each child to complete.") ,
+    });
+  }
+
+  // For long_detail bills, append a warning. The existing flow handles
+  // page-1 extraction correctly per the prompt; we just mark this so
+  // testers know this is a long bill awaiting Phase-2 unit-level work.
+  if (structure?.type === "long_detail") {
+    extracted.warnings = [
+      ...extracted.warnings,
+      `[Long-detail bill] ${structure.notes ?? "This bill has multiple pages of unit-level detail."} ` +
+      `Phase 1 extracts the page-1 summary only. Per-unit extraction will land in a future update.`,
+    ];
   }
 
   // Resolve utility account by vendor + account number if not already linked
@@ -97,24 +142,6 @@ export async function POST(_: Request, { params }: { params: { invoiceId: string
           gl_code: gl.code,
           sub_code: ua.sub_code,
         });
-      }
-    } else {
-      // No existing UA for this account number.
-      // Use property-aware vendor resolver to avoid picking the wrong variant
-      // (e.g. Republic - Duncan Disposal instead of Republic Services Inc.)
-      const resolved = await resolveVendor(supabase, {
-        extractedVendorName: extracted.vendor_name,
-        propertyId: propertyId ?? null,
-        accountNumber: extracted.account_number,
-      });
-      if (resolved.vendorId) {
-        vendorId = resolved.vendorId;
-      }
-      if (resolved.confidence !== "none") {
-        extracted.warnings = [
-          ...extracted.warnings,
-          `Vendor resolved via ${resolved.confidence}: ${resolved.debug}`,
-        ];
       }
     }
   }

@@ -1,102 +1,86 @@
-import { TopBar } from "@/components/layout/TopBar";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { cn } from "@/lib/cn";
-import { formatDollars } from "@/lib/format";
-import type { UserRole } from "@/lib/types";
+/**
+ * /admin/users — manage user roles, activation, and approval limits.
+ *
+ * Admin-only. Reads from user_profiles via service-role to see the full
+ * portfolio of users (the RLS policy on user_profiles only allows users
+ * to see their own row, so the regular cookie client returns 1 row).
+ *
+ * Role taxonomy (current; will expand when proper RBAC lands):
+ *   admin              — full access including destructive ops
+ *   tester             — read everything, do most things, no destructive ops
+ *   viewer             — pending approval (default for new signups)
+ *   ap_clerk/approver/property_manager — legacy enum values; not currently
+ *                        wired up. Visible in the dropdown for forward
+ *                        compatibility.
+ */
 
-const ROLE_DESCRIPTION: Record<UserRole, string> = {
-  admin:            "Full access; manages users, vendors, accounts, budgets",
-  ap_clerk:         "Codes bills, adds variance notes, prepares for approval",
-  approver:         "Approves bills, signs off on payment runs",
-  property_manager: "Views own property tracker, responds to variance inquiries",
-  viewer:           "Read-only access to assigned properties",
-};
+import { TopBar } from "@/components/layout/TopBar";
+import {
+  createSupabaseServerClient,
+  createSupabaseServiceClient,
+} from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
+import { UserRoleEditor } from "./UserRoleEditor";
+
+// Always re-fetch on each request — user list is small and we want
+// changes to show up immediately after editing.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export default async function AdminUsersPage() {
-  const supabase = createSupabaseServerClient();
+  // Auth: enforce admin role inline. The middleware bumps non-admins
+  // away from the dashboard entirely if they're 'viewer', but a 'tester'
+  // user could navigate here directly. Refuse them at the page level.
+  const userClient = createSupabaseServerClient();
+  const { data: { user } } = await userClient.auth.getUser();
+  if (!user) redirect("/login");
+
+  const { data: myProfile } = await userClient
+    .from("user_profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  if (myProfile?.role !== "admin") {
+    return (
+      <>
+        <TopBar title="Users & roles" subtitle="Admin only" />
+        <div className="p-8">
+          <div className="card p-10 text-center text-nurock-slate">
+            This page requires the admin role.
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // Use service-role to see all profiles, not just the current user's
+  const supabase = createSupabaseServiceClient();
   const { data } = await supabase
     .from("user_profiles")
-    .select("id, email, full_name, role, property_scope, can_approve_up_to, can_approve_variance_flagged, active")
+    .select("id, email, full_name, role, property_scope, can_approve_up_to, can_approve_variance_flagged, active, created_at")
+    .order("active", { ascending: false })  // active users first
     .order("role")
     .order("email");
+
+  const allUsers = (data ?? []) as any[];
+  const pending = allUsers.filter(u => u.role === "viewer" && u.active);
+  const active  = allUsers.filter(u => u.role !== "viewer" && u.active);
+  const inactive = allUsers.filter(u => !u.active);
 
   return (
     <>
       <TopBar
         title="Users & roles"
-        subtitle="Invite users, assign roles, scope to properties, and set approval caps"
+        subtitle={`${active.length} active · ${pending.length} pending · ${inactive.length} inactive`}
       />
       <div className="p-8 space-y-6">
-        <div className="card p-5">
-          <h3 className="font-display font-semibold text-nurock-black mb-3">Role reference</h3>
-          <dl className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-            {(Object.entries(ROLE_DESCRIPTION) as Array<[UserRole, string]>).map(([role, desc]) => (
-              <div key={role} className="flex gap-3">
-                <span className="badge badge-navy h-5 shrink-0 capitalize">
-                  {role.replace(/_/g, " ")}
-                </span>
-                <span className="text-nurock-slate">{desc}</span>
-              </div>
-            ))}
-          </dl>
-        </div>
-
-        <div className="card overflow-hidden">
-          <div className="px-5 py-3 border-b border-nurock-border flex items-center justify-between">
-            <h3 className="font-display font-semibold text-nurock-black">Active users</h3>
-            <button disabled className="btn-primary opacity-60" title="Coming in next phase">
-              Invite user
-            </button>
-          </div>
-          <table className="min-w-full text-sm">
-            <thead className="bg-[#FAFBFC] text-left text-xs uppercase tracking-wide text-nurock-slate">
-              <tr>
-                <th className="px-4 py-3 font-medium">User</th>
-                <th className="px-4 py-3 font-medium">Role</th>
-                <th className="px-4 py-3 font-medium">Property scope</th>
-                <th className="px-4 py-3 font-medium text-right">Approval cap</th>
-                <th className="px-4 py-3 font-medium">Flagged approval</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-nurock-border">
-              {(data ?? []).length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-nurock-slate">
-                    No user profiles yet. Sign in with a NuRock email once and an admin can
-                    elevate your role from the Supabase dashboard.
-                  </td>
-                </tr>
-              ) : (
-                (data ?? []).map((u: any) => (
-                  <tr key={u.id}>
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-nurock-black">{u.full_name ?? u.email}</div>
-                      <div className="text-xs text-nurock-slate">{u.email}</div>
-                    </td>
-                    <td className="px-4 py-3 capitalize">{u.role.replace(/_/g, " ")}</td>
-                    <td className="px-4 py-3 text-xs">
-                      {u.property_scope && u.property_scope.length > 0
-                        ? `${u.property_scope.length} properties`
-                        : "All (role default)"}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {u.can_approve_up_to !== null ? formatDollars(Number(u.can_approve_up_to)) : "No cap"}
-                    </td>
-                    <td className="px-4 py-3">
-                      {u.can_approve_variance_flagged ? "Allowed" : "Not allowed"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={cn("badge", u.active ? "badge-green" : "bg-nurock-flag-slate-bg text-nurock-slate")}>
-                        {u.active ? "Active" : "Inactive"}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        <UserRoleEditor
+          pendingUsers={pending}
+          activeUsers={active}
+          inactiveUsers={inactive}
+          currentUserId={user.id}
+        />
       </div>
     </>
   );
