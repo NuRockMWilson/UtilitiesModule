@@ -121,7 +121,7 @@ export default async function UAOrphanAuditPage() {
     const { data: page, error } = await supabase
       .from("utility_accounts")
       .select(`
-        id, account_number, description, sub_code, active,
+        id, account_number, description, sub_code, active, is_shared_master,
         property:properties(id, code, name),
         vendor:vendors(id, name),
         gl:gl_accounts(id, code, description)
@@ -140,11 +140,21 @@ export default async function UAOrphanAuditPage() {
 
   // Get invoice counts per UA (aggregate). Same pagination requirement
   // as above — there are way more than 1000 invoices in the portfolio.
-  let allInvoices: Array<{ utility_account_id: string; total_amount_due: number }> = [];
+  //
+  // We also fetch property_id so we can detect "corrupted" orphans:
+  // orphan UAs whose linked invoices come from a property other than
+  // the orphan's own property (or from multiple properties at once).
+  // Auto-merging such an orphan would propagate the corruption into
+  // the merge target — which is what produced the recent TPC trash bug.
+  let allInvoices: Array<{
+    utility_account_id: string;
+    property_id: string | null;
+    total_amount_due: number;
+  }> = [];
   for (let from = 0; ; from += PAGE_SIZE) {
     const { data: page } = await supabase
       .from("invoices")
-      .select("utility_account_id, total_amount_due")
+      .select("utility_account_id, property_id, total_amount_due")
       .not("utility_account_id", "is", null)
       .range(from, from + PAGE_SIZE - 1);
     if (!page || page.length === 0) break;
@@ -155,6 +165,10 @@ export default async function UAOrphanAuditPage() {
 
   // Build a map: ua_id → { count, total }
   const countMap = new Map<string, { count: number; total: number }>();
+  // Also build a map: ua_id → Set<property_id> of distinct properties
+  // observed across that UA's linked invoices. Used to detect corrupted
+  // orphans whose invoices came from properties other than the UA's own.
+  const propsMap = new Map<string, Set<string>>();
   for (const inv of allInvoices) {
     const id = inv.utility_account_id as string;
     const cur = countMap.get(id) ?? { count: 0, total: 0 };
@@ -162,6 +176,14 @@ export default async function UAOrphanAuditPage() {
       count: cur.count + 1,
       total: cur.total + Number(inv.total_amount_due ?? 0),
     });
+    if (inv.property_id) {
+      let s = propsMap.get(id);
+      if (!s) {
+        s = new Set<string>();
+        propsMap.set(id, s);
+      }
+      s.add(inv.property_id);
+    }
   }
 
   // Flag suspected orphans — only consider ACTIVE UAs. Inactive ones
@@ -173,10 +195,22 @@ export default async function UAOrphanAuditPage() {
     return isPlaceholder(acct);
   });
 
-  // Three categories based on what peers exist at the same property + GL:
+  // Four categories based on what peers exist at the same property + GL,
+  // AND on whether the orphan's own invoices are property-aligned with the
+  // orphan itself:
+  //
+  //   corrupted_orphan  — the orphan's linked invoices come from a property
+  //                       other than the orphan's own (or from multiple
+  //                       properties). Auto-merging would propagate the
+  //                       corruption into the target. Must be cleaned up
+  //                       BEFORE merge by unlinking mismatched invoices.
+  //                       This is the class of bug that produced the TPC
+  //                       trash incident.
   //
   //   merge_target      — there's exactly one real (non-placeholder) UA at
-  //                       the same property+GL → safe to auto-merge.
+  //                       the same property+GL → safe to auto-merge. The
+  //                       generated SQL contains a property-alignment
+  //                       precondition as belt-and-suspenders defense.
   //
   //   multi_stream_review — there are multiple real UAs at the same
   //                       property+GL (e.g. compactor + recycle). The
@@ -188,7 +222,12 @@ export default async function UAOrphanAuditPage() {
   //                       for that vendor at that property. Don't merge —
   //                       instead, prompt the user to fill in the real
   //                       account number when the next live bill arrives.
-  type Category = "merge_target" | "multi_stream_review" | "historical_only";
+  //
+  // Shared-master UAs (is_shared_master = true) are exempt from the
+  // corruption check — by design, they accept invoices from any property.
+  // In practice they don't appear in this audit anyway since they have
+  // real account numbers, but the check is defensive.
+  type Category = "corrupted_orphan" | "merge_target" | "multi_stream_review" | "historical_only";
 
   type OrphanRow = {
     ua: typeof allUAs[0];
@@ -203,12 +242,65 @@ export default async function UAOrphanAuditPage() {
      * warning text shown on the card. Null otherwise.
      */
     avgWarning: string | null;
+    /**
+     * For corrupted orphans, a human-readable breakdown of the
+     * property mismatch (e.g. "UA at 603; invoices from 601 (15), 603 (16),
+     * 604 (16)"). Null for non-corrupted rows.
+     */
+    corruptionDetail: string | null;
   };
+
+  // Pre-fetch property code map (id → code) for human-readable corruption
+  // breakdowns. Built once outside the row loop.
+  const propCodeById = new Map<string, string>();
+  for (const ua of allUAs) {
+    const p = (ua.property as any);
+    if (p?.id && p?.code) propCodeById.set(p.id, p.code);
+  }
 
   const rows: OrphanRow[] = suspects.map(orphan => {
     const stats = countMap.get(orphan.id) ?? { count: 0, total: 0 };
     const prop = (orphan.property as any);
     const gl = (orphan.gl as any);
+    const orphanPropId: string | undefined = prop?.id;
+    const orphanPropCode: string = prop?.code ?? "?";
+
+    // ── Corruption check ─────────────────────────────────────────────────
+    // Inspect the property_id distribution of invoices linked to the
+    // orphan. If any link doesn't match the orphan's own property_id,
+    // and the UA is NOT a sanctioned shared master, the orphan is
+    // corrupted. Auto-merge must be blocked until the mismatched
+    // invoices are unlinked.
+    const linkedProps = propsMap.get(orphan.id) ?? new Set<string>();
+    const isSharedMaster = Boolean((orphan as any).is_shared_master);
+    let isCorrupted = false;
+    let corruptionDetail: string | null = null;
+    if (!isSharedMaster && orphanPropId && linkedProps.size > 0) {
+      const hasMismatch = linkedProps.size > 1 ||
+        !linkedProps.has(orphanPropId);
+      if (hasMismatch) {
+        isCorrupted = true;
+        // Build a per-property invoice count breakdown for the card.
+        // E.g. "UA at 603; invoices from 601 (15), 603 (16), 604 (16)"
+        const perProp = new Map<string, { count: number; total: number }>();
+        for (const inv of allInvoices) {
+          if (inv.utility_account_id !== orphan.id) continue;
+          const pid = inv.property_id ?? "(null)";
+          const cur = perProp.get(pid) ?? { count: 0, total: 0 };
+          perProp.set(pid, {
+            count: cur.count + 1,
+            total: cur.total + Number(inv.total_amount_due ?? 0),
+          });
+        }
+        const parts: string[] = [];
+        for (const [pid, st] of perProp) {
+          const code = pid === "(null)" ? "(null)" : (propCodeById.get(pid) ?? pid.slice(0, 8));
+          parts.push(`${code} (${st.count} inv, $${st.total.toFixed(2)})`);
+        }
+        parts.sort();
+        corruptionDetail = `UA at ${orphanPropCode}; invoices from ${parts.join(", ")}`;
+      }
+    }
 
     // Real (non-placeholder) UAs at the same property + GL
     const candidates = allUAs
@@ -255,13 +347,62 @@ export default async function UAOrphanAuditPage() {
       ? (orphanAvg / targetAvg > RATIO_LIMIT || targetAvg / orphanAvg > RATIO_LIMIT)
       : false;
 
-    if (candidates.length === 1 && !avgsAreFarApart) {
+    if (isCorrupted) {
+      // Corruption takes precedence over every other category. Generate
+      // cleanup SQL that unlinks invoices whose property_id differs from
+      // the orphan's own. After cleanup, the orphan can be re-evaluated
+      // through the normal merge flow.
+      category = "corrupted_orphan";
+      mergeSql = `-- ⛔ CORRUPTED ORPHAN — invoices linked to this UA come from a property
+-- other than the UA itself. Auto-merge would propagate the corruption.
+--
+-- Orphan UA: "${orphan.account_number}" at ${orphanPropCode} / GL ${gl?.code}
+-- Distribution: ${corruptionDetail}
+--
+-- This SQL unlinks the mismatched invoices (sets utility_account_id = NULL).
+-- Once unlinked, they appear under "Historical / unmapped invoices" in the
+-- relevant tracker and can be relinked manually. The orphan keeps any
+-- invoices that legitimately belong at ${orphanPropCode} and can then be
+-- merged via the normal flow on the next audit refresh.
+DO $$
+DECLARE
+  v_unlinked int;
+BEGIN
+  UPDATE invoices
+     SET utility_account_id = NULL,
+         updated_at         = now()
+   WHERE utility_account_id = '${orphan.id}'
+     AND property_id IS DISTINCT FROM '${orphanPropId ?? ""}';
+
+  GET DIAGNOSTICS v_unlinked = ROW_COUNT;
+  RAISE NOTICE 'Unlinked % invoices whose property_id differed from %',
+    v_unlinked, '${orphanPropCode}';
+END $$;`;
+    } else if (candidates.length === 1 && !avgsAreFarApart) {
       category = "merge_target";
       const target = candidates[0];
+      const targetPropId = (target.property as any)?.id ?? "";
       mergeSql = `-- Merge orphan "${orphan.account_number}" → "${target.account_number}"
 -- Property: ${prop?.code}  GL: ${gl?.code}
 DO $$
+DECLARE
+  v_mismatched int;
 BEGIN
+  -- 0. Property-alignment guardrail (added 2026-05). Refuse to merge if
+  --    any source invoice belongs to a property other than the target UA.
+  --    This prevents a recurrence of the TPC trash incident, where a
+  --    merge propagated mis-rooted invoices into a UA at the wrong
+  --    property. If this fires, run /admin/ua-audit again — the orphan
+  --    will appear as "corrupted_orphan" with cleanup SQL.
+  SELECT count(*) INTO v_mismatched
+    FROM invoices
+   WHERE utility_account_id = '${orphan.id}'
+     AND property_id IS DISTINCT FROM '${targetPropId}';
+
+  IF v_mismatched > 0 THEN
+    RAISE EXCEPTION 'Refusing merge: % source invoices belong to a property other than the target UA. Re-run the UA Audit and use the corrupted_orphan cleanup SQL first.', v_mismatched;
+  END IF;
+
   -- 1. Re-link invoices
   UPDATE invoices
     SET utility_account_id = '${target.id}',
@@ -332,9 +473,11 @@ ${candidates.map(c => `--   "${c.account_number}" — ${c.invoiceCount} invoices
       candidates,
       mergeSql,
       avgWarning,
+      corruptionDetail,
     };
   });
 
+  const corrupted   = rows.filter(r => r.category === "corrupted_orphan");
   const merge       = rows.filter(r => r.category === "merge_target");
   const review      = rows.filter(r => r.category === "multi_stream_review");
   const historical  = rows.filter(r => r.category === "historical_only");
@@ -345,7 +488,7 @@ ${candidates.map(c => `--   "${c.account_number}" — ${c.invoiceCount} invoices
     <>
       <TopBar
         title="Utility Account Audit"
-        subtitle={`${totalOrphans} flagged · ${merge.length} auto-merge · ${review.length} review · ${historical.length} historical-only · ${totalOrphanInvoices.toLocaleString()} invoices`}
+        subtitle={`${totalOrphans} flagged · ${corrupted.length} corrupted · ${merge.length} auto-merge · ${review.length} review · ${historical.length} historical-only · ${totalOrphanInvoices.toLocaleString()} invoices`}
       />
       <div className="p-8">
         {totalOrphans === 0 ? (
@@ -355,6 +498,7 @@ ${candidates.map(c => `--   "${c.account_number}" — ${c.invoiceCount} invoices
           </div>
         ) : (
           <OrphanAuditClient
+            corruptedRows={corrupted as any}
             mergeRows={merge as any}
             reviewRows={review as any}
             historicalRows={historical as any}

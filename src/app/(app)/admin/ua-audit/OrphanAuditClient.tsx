@@ -12,7 +12,7 @@ interface CandidateUA {
   vendor: { name: string } | null;
 }
 
-type Category = "merge_target" | "multi_stream_review" | "historical_only";
+type Category = "corrupted_orphan" | "merge_target" | "multi_stream_review" | "historical_only";
 
 interface OrphanRow {
   ua: {
@@ -29,15 +29,17 @@ interface OrphanRow {
   candidates: CandidateUA[];
   mergeSql: string;
   avgWarning: string | null;
+  corruptionDetail: string | null;
 }
 
 interface Props {
+  corruptedRows: OrphanRow[];
   mergeRows: OrphanRow[];
   reviewRows: OrphanRow[];
   historicalRows: OrphanRow[];
 }
 
-export function OrphanAuditClient({ mergeRows, reviewRows, historicalRows }: Props) {
+export function OrphanAuditClient({ corruptedRows, mergeRows, reviewRows, historicalRows }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -65,17 +67,29 @@ export function OrphanAuditClient({ mergeRows, reviewRows, historicalRows }: Pro
           <span className="font-semibold">What this page shows:</span> Utility accounts
           with placeholder account numbers (e.g.{" "}
           <code className="bg-amber-100 px-1 rounded text-xs">Garbage Total</code>,{" "}
-          <code className="bg-amber-100 px-1 rounded text-xs">nan</code>). Three categories
-          based on what else exists at the same property + GL.
+          <code className="bg-amber-100 px-1 rounded text-xs">nan</code>). Categorized
+          by whether the orphan is data-integrity-clean and what peers exist at the
+          same property + GL.
         </p>
       </div>
+
+      {corruptedRows.length > 0 && (
+        <Section
+          title="⛔ Corrupted — clean up before merge"
+          count={corruptedRows.length}
+          tone="red"
+          description="The invoices linked to this orphan come from a property other than the orphan UA itself (or from multiple properties). Auto-merge would propagate the corruption into the merge target. Run the unlink SQL first, then refresh this page — once cleaned, the orphan will reappear under Auto-merge or Historical-only."
+        >
+          {corruptedRows.map(renderRow)}
+        </Section>
+      )}
 
       {mergeRows.length > 0 && (
         <Section
           title="Auto-merge"
           count={mergeRows.length}
           tone="green"
-          description="A real (non-placeholder) UA exists at the same property + GL. Safe to merge the orphan into it."
+          description="A real (non-placeholder) UA exists at the same property + GL. Safe to merge the orphan into it. Generated SQL includes a property-alignment guardrail that aborts if any source invoice belongs to a different property than the target."
         >
           {mergeRows.map(renderRow)}
         </Section>
@@ -111,11 +125,12 @@ function Section({
 }: {
   title: string;
   count: number;
-  tone: "green" | "amber" | "slate";
+  tone: "red" | "green" | "amber" | "slate";
   description: string;
   children: React.ReactNode;
 }) {
   const toneClasses = {
+    red: "text-red-800",
     green: "text-green-800",
     amber: "text-amber-800",
     slate: "text-nurock-slate",
@@ -145,12 +160,14 @@ function OrphanCard({
   const { ua, category, invoiceCount, invoiceTotal, candidates, mergeSql } = row;
 
   const badgeStyle = {
+    corrupted_orphan: "bg-red-100 text-red-800",
     merge_target: "bg-green-100 text-green-700",
     multi_stream_review: "bg-amber-100 text-amber-800",
     historical_only: "bg-gray-100 text-gray-700",
   }[category];
 
   const badgeLabel = {
+    corrupted_orphan: "Corrupted",
     merge_target: "Auto-merge",
     multi_stream_review: "Review",
     historical_only: "Historical-only",
@@ -159,6 +176,7 @@ function OrphanCard({
   return (
     <div className={cn(
       "card",
+      category === "corrupted_orphan" && "border-red-200 bg-red-50/40",
       category === "historical_only" && "border-gray-200 bg-gray-50/40",
     )}>
       <button
@@ -202,7 +220,22 @@ function OrphanCard({
 
       {expanded && (
         <div className="px-5 pb-5 border-t border-gray-100 pt-4 space-y-4">
-          {/* Per-invoice average mismatch warning — surfaces above everything else */}
+          {/* Corrupted-orphan breakdown — surfaces above everything else */}
+          {category === "corrupted_orphan" && row.corruptionDetail && (
+            <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-900">
+              <div className="font-semibold mb-1">Property mismatch</div>
+              <p className="text-xs leading-relaxed font-mono">{row.corruptionDetail}</p>
+              <p className="text-xs mt-2 leading-relaxed">
+                The unlink SQL below will set <code className="bg-red-100 px-1 rounded">utility_account_id = NULL</code>{" "}
+                on every invoice whose property doesn&apos;t match this UA&apos;s property.
+                Those invoices will then surface in the relevant tracker under the
+                synthetic &quot;Historical / unmapped invoices&quot; row, where they can
+                be relinked to the correct UA manually.
+              </p>
+            </div>
+          )}
+
+          {/* Per-invoice average mismatch warning */}
           {row.avgWarning && (
             <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-800">
               <div className="font-semibold mb-1">Per-invoice average mismatch</div>
@@ -254,7 +287,7 @@ function OrphanCard({
                 This is the only UA for {ua.vendor?.name} at {ua.property?.code} / GL {ua.gl?.code}.
                 Its account number is a placeholder from the historical import. When the next live
                 bill arrives for this vendor at this property, copy the real account number from the
-                bill and update this UA — don't create a new one.
+                bill and update this UA — don&apos;t create a new one.
               </p>
             </div>
           )}
@@ -262,7 +295,8 @@ function OrphanCard({
           <div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-semibold text-nurock-slate uppercase tracking-wide">
-                {category === "merge_target" ? "Merge SQL"
+                {category === "corrupted_orphan" ? "Cleanup SQL (run first)"
+                  : category === "merge_target" ? "Merge SQL"
                   : category === "multi_stream_review" ? "Manual merge template"
                   : "Reference SQL (when bill arrives)"}
               </span>
