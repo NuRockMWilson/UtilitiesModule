@@ -108,6 +108,27 @@ export default async function TrashDetailPage({
     });
   }
 
+  // Synthetic "Summary rollup" row for orphan invoices.
+  //
+  // Historical invoices imported from the legacy spreadsheet typically have
+  // no utility_account_id — they were rolled up at the property × GL level,
+  // not the per-account level. Above we route them to "__summary-trash" in
+  // the data map. Now we have to add a matching display row to `accounts`
+  // so the table actually shows the dollars; without this, the table renders
+  // empty even though the YTD card at top correctly shows the total (which
+  // is computed independently from raw invoices).
+  //
+  // The synthetic row sorts to the top so it's visible immediately. Real
+  // utility_accounts (when they exist) appear below it.
+  if (amountsByAccountMonth.has("__summary-trash")) {
+    accounts.unshift({
+      id:             "__summary-trash",
+      account_number: "—",
+      description:    "Historical / unmapped invoices",
+      vendor_name:    null,
+    });
+  }
+
   // Per-account notes for this property × year (detail-tab notes are attached
   // at the utility_account × month granularity).
   const acctIdsForNotes = accounts.map(a => a.id).filter(id => !id.startsWith("__summary-"));

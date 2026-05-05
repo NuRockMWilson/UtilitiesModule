@@ -90,11 +90,10 @@ export default async function MetersDetailPage({
     gl_code:        glIdToCode.get(a.gl_account_id) ?? "5112",
   }));
 
-  // Partition into House Meters (5112) and Clubhouse (5116). Matches the
-  // legacy spreadsheet layout — clubhouse is its own section because it's
-  // a distinct meter on a different GL.
-  const houseMeters     = accounts.filter(a => a.gl_code === "5112");
-  const clubhouseMeters = accounts.filter(a => a.gl_code === "5116");
+  // Partition into House Meters (5112) and Clubhouse (5116) is computed
+  // BELOW after synthetic rows are added — see the partition right after
+  // the orphan-summary block, so synthetic rows for orphan invoices land
+  // in their correct GL group.
 
   // Pull every electric invoice for this property — tied to a utility_account
   // or not. Historical Summary rows have no utility_account_id; we route them
@@ -108,7 +107,13 @@ export default async function MetersDetailPage({
   const invoices = (invRaw ?? []).map((i: any) => ({
     id:             i.id as string,
     invoice_number: i.invoice_number as string | null,
-    account_id:     (i.utility_account_id ?? "__summary-electric") as string,
+    // Orphan invoices (no utility_account_id) are routed to a GL-specific
+    // synthetic key so house-electric (5112) orphans don't get mixed with
+    // clubhouse (5116) orphans. Each shows up in its own table below.
+    account_id: (
+      i.utility_account_id
+        ?? `__summary-electric-${glIdToCode.get(i.gl_account_id) ?? "5112"}`
+    ) as string,
     date:           (i.service_period_end ?? i.invoice_date) as string | null,
     amount:         Number(i.total_amount_due ?? 0),
   }));
@@ -134,6 +139,35 @@ export default async function MetersDetailPage({
       number: inv.invoice_number,
     });
   }
+
+  // Synthetic "Summary rollup" rows for orphan invoices. Historical
+  // imports often left utility_account_id null, so the dollars exist
+  // but no display row points at them — they get bucketed under
+  // "__summary-electric-{glCode}" but the table doesn't render those
+  // keys without a matching `accounts` row. Synthesize one per GL where
+  // orphans are present so the dollars become visible.
+  for (const gl of ["5112", "5116"]) {
+    const synthKey = `__summary-electric-${gl}`;
+    if (amountsByAccountMonth.has(synthKey)) {
+      accounts.unshift({
+        id:             synthKey,
+        account_number: "—",
+        description:    "Historical / unmapped invoices",
+        meter_id:       null,
+        esi_id:         null,
+        category:       null,
+        vendor_name:    null,
+        gl_code:        gl,
+      });
+    }
+  }
+
+  // Partition into House Meters (5112) and Clubhouse (5116). Matches the
+  // legacy spreadsheet layout — clubhouse is its own section because it's
+  // a distinct meter on a different GL. Computed AFTER synthetic-row
+  // insert so synthetic rows for orphan invoices land in their GL group.
+  const houseMeters     = accounts.filter(a => a.gl_code === "5112");
+  const clubhouseMeters = accounts.filter(a => a.gl_code === "5116");
 
   // Per-account notes for this property × year (detail-tab notes are attached
   // at the utility_account × month granularity).

@@ -98,7 +98,10 @@ export default async function WaterDetailPage({
     return {
       id:             i.id as string,
       invoice_number: i.invoice_number as string | null,
-      account_id:     i.utility_account_id as string | null,
+      // Orphan invoices (no utility_account_id) get routed to a synthetic
+      // key per GL so the dollars still surface in the table. Without this,
+      // the bucket loop below silently dropped them via `if (!inv.account_id) continue`.
+      account_id:     (i.utility_account_id ?? `__summary-water-${gl?.code ?? "5120"}`) as string,
       gl_code:        gl?.code as string | undefined,
       date:           (i.service_period_end ?? i.invoice_date) as string | null,
       amount:         Number(i.total_amount_due ?? 0),
@@ -116,7 +119,10 @@ export default async function WaterDetailPage({
   const amountsByAccountMonth = new Map<string, Record<number, number>>();
   const invoiceByAccountMonth = new Map<string, { id: string; number: string | null }>();
   for (const inv of invoices) {
-    if (!inv.date || !inv.account_id) continue;
+    if (!inv.date) continue;
+    // Note: we no longer skip when account_id is null. Orphan invoices are
+    // routed to "__summary-water-{gl}" above so they bucket correctly into
+    // a synthetic display row added below.
     const y = parseInt(inv.date.substring(0, 4), 10);
     if (y !== year) continue;
     const m = parseInt(inv.date.substring(5, 7), 10);
@@ -127,6 +133,29 @@ export default async function WaterDetailPage({
       id:     inv.id,
       number: inv.invoice_number,
     });
+  }
+
+  // Synthetic "Summary rollup" rows for orphan invoices, one per GL where
+  // orphans exist. Each falls into the appropriate category section (Water,
+  // Irrigation, Sewer) when partitioned below.
+  const orphanGlMap: Array<{ gl: string; category: "Water" | "Irrigation" | "Sewer" }> = [
+    { gl: "5120", category: "Water"      },
+    { gl: "5122", category: "Irrigation" },
+    { gl: "5125", category: "Sewer"      },
+  ];
+  for (const og of orphanGlMap) {
+    const synthKey = `__summary-water-${og.gl}`;
+    if (amountsByAccountMonth.has(synthKey)) {
+      accounts.unshift({
+        id:             synthKey,
+        account_number: "—",
+        description:    "Historical / unmapped invoices",
+        meter_id:       null,
+        esi_id:         null,
+        category:       og.category,
+        vendor_name:    null,
+      });
+    }
   }
 
   // Per-account notes for this property × year (detail-tab notes are attached

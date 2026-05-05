@@ -84,7 +84,7 @@ export default async function CommsDetailPage({
     return {
       id:             i.id as string,
       invoice_number: i.invoice_number as string | null,
-      account_id:     i.utility_account_id as string | null,
+      account_id:     (i.utility_account_id ?? "__summary-comms") as string,
       date:           (i.service_period_end ?? i.invoice_date) as string | null,
       amount:         Number(i.total_amount_due ?? 0),
     };
@@ -99,7 +99,9 @@ export default async function CommsDetailPage({
   const amountsByAccountMonth = new Map<string, Record<number, number>>();
   const invoiceByAccountMonth = new Map<string, { id: string; number: string | null }>();
   for (const inv of invoices) {
-    if (!inv.date || !inv.account_id) continue;
+    if (!inv.date) continue;
+    // Note: no longer filtering on account_id — orphans are routed to a
+    // synthetic key above so the dollars become visible via a synth row.
     const y = parseInt(inv.date.substring(0, 4), 10);
     if (y !== year) continue;
     const m = parseInt(inv.date.substring(5, 7), 10);
@@ -109,6 +111,20 @@ export default async function CommsDetailPage({
     invoiceByAccountMonth.set(`${inv.account_id}:${m}`, {
       id:     inv.id,
       number: inv.invoice_number,
+    });
+  }
+
+  // Synthetic "Summary rollup" row for orphan invoices (comms is single-GL
+  // 5140). Mirrors the pattern in trash/meters/water.
+  if (amountsByAccountMonth.has("__summary-comms")) {
+    allAccounts.unshift({
+      id:             "__summary-comms",
+      account_number: "—",
+      description:    "Historical / unmapped invoices",
+      meter_id:       null,
+      esi_id:         null,
+      category:       null,
+      vendor_name:    null,
     });
   }
 
